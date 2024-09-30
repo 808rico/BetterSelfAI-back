@@ -5,14 +5,8 @@ import cors from 'cors';
 import db from './db.mjs';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
-import fs from "fs";
-import path from "path";
-import { ElevenLabsClient, ElevenLabs } from "elevenlabs";
 
-// Initialiser le client Eleven Labs avec la clé API
-const elevenlabs = new ElevenLabsClient({
-  apiKey: process.env.ELEVENLABS_API_KEY // Defaults to process.env.ELEVENLABS_API_KEY
-})
+
 
 const app = express();
 
