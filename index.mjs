@@ -16,7 +16,14 @@ const elevenlabs = new ElevenLabsClient({
 
 const app = express();
 
-app.use(cors());
+// Configure CORS to allow your frontend URL
+const corsOptions = {
+  origin: ['https://betterselfai.netlify.app', 'http://localhost:3000'], // Add other URLs if needed
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Initialiser OpenAI avec la clé d'API
