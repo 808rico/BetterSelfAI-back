@@ -12,7 +12,7 @@ const app = express();
 
 // Configure CORS to allow your frontend URL
 const corsOptions = {
-  origin: ['https://betterselfai.netlify.app', 'http://localhost:3000'], // Add other URLs if needed
+  origin: ['https://betterselfai.com', 'https://betterselfai.netlify.app', 'http://localhost:3000'], // Add other URLs if needed
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 };
