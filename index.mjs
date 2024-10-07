@@ -12,7 +12,7 @@ const app = express();
 
 // Configure CORS to allow your frontend URL
 const corsOptions = {
-  origin: ['https://betterselfai.com', 'https://betterselfai.netlify.app', 'http://localhost:3000'], // Add other URLs if needed
+  origin: ['https://betterselfai.com', 'https://betterselfai.netlify.app', 'http://localhost:3000', 'http://localhost:5173',], // Add other URLs if needed
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 };
@@ -59,11 +59,6 @@ app.get('/api/users/:userHash', (req, res) => {
 });
 
 
-
-
-
-
-
 app.post('/api/conversations/message', async (req, res) => {
   const { userHash, message, conversationHash, modelId } = req.body;
 
@@ -72,7 +67,48 @@ app.post('/api/conversations/message', async (req, res) => {
   }
 
   try {
-    // Store the user's message in the database
+    // 1. Récupérer les 5 derniers messages de la conversation
+    const getLastMessagesQuery = `
+      SELECT sender, message FROM messages 
+      WHERE conversation_hash = ? 
+      ORDER BY created_at DESC 
+      LIMIT 20
+    `;
+    
+    const lastMessages = await new Promise((resolve, reject) => {
+      db.query(getLastMessagesQuery, [conversationHash], (err, results) => {
+        if (err) {
+          console.error('Error fetching last messages:', err);
+          reject(new Error('An error occurred while fetching last messages'));
+        } else {
+          resolve(results);
+        }
+      });
+    });
+
+    // 2. Construire le prompt en texte avec les messages récents
+    let conversationContext = 'Just answer the message you would say to the user without "" . \n \n This is the conversation history between you (the AI) and the user:\n';
+    lastMessages.reverse().forEach((msg) => {
+      const senderLabel = msg.sender === 'user' ? 'User' : 'You';
+      conversationContext += `${senderLabel}: ${msg.message}\n`;
+    });
+
+    // Ajouter le message actuel de l'utilisateur
+    conversationContext += `User: ${message}\n`;
+
+    // 3. Appeler OpenAI API pour obtenir la réponse en fournissant tout le contexte sous forme de texte
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: 'system', content: 'You are a therapist. Answer questions and provide helpful, empathetic responses.' },
+        { role: 'user', content: conversationContext },
+      ],
+    });
+
+
+    const aiReply = completion.choices[0].message.content;
+
+    // 4. Enregistrer le message de l'utilisateur dans la base de données
     const userMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
     db.query(userMessageQuery, [conversationHash, userHash, 'user', message], (err) => {
       if (err) {
@@ -81,18 +117,7 @@ app.post('/api/conversations/message', async (req, res) => {
       }
     });
 
-    // Call OpenAI API to get the response
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: 'system', content: 'You are a therapist. Answer questions and provide helpful, empathetic responses.' },
-        { role: 'user', content: message },
-      ],
-    });
-
-    const aiReply = completion.choices[0].message.content;
-    
-    // Store the AI's response in the database
+    // 5. Enregistrer la réponse de l'IA dans la base de données
     const aiMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
     db.query(aiMessageQuery, [conversationHash, userHash, 'AI', aiReply], (err) => {
       if (err) {
@@ -101,20 +126,20 @@ app.post('/api/conversations/message', async (req, res) => {
       }
     });
 
-    // Call the OpenAI TTS API to convert the AI response to audio using the provided modelId
+    // 6. Appeler l'API OpenAI TTS pour convertir la réponse de l'IA en audio
     try {
       const mp3 = await openai.audio.speech.create({
-        model: "tts-1-hd", // The model to use for text-to-speech
-        voice: modelId, // The modelId sent from the frontend
-        input: aiReply, // The text response from the AI
+        model: "tts-1-hd", // Modèle utilisé pour la conversion texte-voix
+        voice: modelId, // ModelId envoyé par le frontend
+        input: aiReply, // Réponse textuelle de l'IA
       });
 
-      // Convert the resulting ArrayBuffer to a Buffer
+      // Convertir le ArrayBuffer en base64
       const buffer = Buffer.from(await mp3.arrayBuffer());
       const audioBase64 = buffer.toString('base64');
       const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
 
-      // Return the AI response text and the audio URL
+      // Retourner la réponse textuelle et l'audio
       res.status(200).json({ reply: aiReply, audio: audioUrl });
     } catch (openaiTtsError) {
       console.error('Error with OpenAI TTS API:', openaiTtsError);
@@ -122,11 +147,10 @@ app.post('/api/conversations/message', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Error fetching response from OpenAI:', error);
-    res.status(500).json({ error: 'An error occurred while communicating with the AI' });
+    console.error('Error processing conversation message:', error);
+    res.status(500).json({ error: 'An error occurred while processing the conversation message' });
   }
 });
-
 
 
 
