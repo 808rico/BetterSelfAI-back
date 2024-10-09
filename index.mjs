@@ -67,7 +67,7 @@ app.post('/api/conversations/message', async (req, res) => {
   }
 
   try {
-    // 1. Récupérer les 5 derniers messages de la conversation
+    // 1. Récupérer les 10 derniers messages de la conversation
     const getLastMessagesQuery = `
       SELECT sender, message FROM messages 
       WHERE conversation_hash = ? 
@@ -87,7 +87,7 @@ app.post('/api/conversations/message', async (req, res) => {
     });
 
     // 2. Construire le prompt en texte avec les messages récents
-    let conversationContext = 'Just answer the message you would say to the user without "" . \n \n This is the conversation history between you (the AI) and the user:\n';
+    let conversationContext = 'Just answer the message you would say to the user without "". \n \n This is the conversation history between you (the AI) and the user:\n';
     lastMessages.reverse().forEach((msg) => {
       const senderLabel = msg.sender === 'user' ? 'User' : 'You';
       conversationContext += `${senderLabel}: ${msg.message}\n`;
@@ -96,34 +96,41 @@ app.post('/api/conversations/message', async (req, res) => {
     // Ajouter le message actuel de l'utilisateur
     conversationContext += `User: ${message}\n`;
 
-    // 3. Appeler OpenAI API pour obtenir la réponse en fournissant tout le contexte sous forme de texte
+    // 3. Enregistrer le message de l'utilisateur dans la base de données avant de traiter la réponse de l'IA
+    const userMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
+    await new Promise((resolve, reject) => {
+      db.query(userMessageQuery, [conversationHash, userHash, 'user', message], (err) => {
+        if (err) {
+          console.error('Error storing user message:', err);
+          reject(new Error('An error occurred while storing the user message'));
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    // 4. Appeler OpenAI API pour obtenir la réponse en fournissant tout le contexte sous forme de texte
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
-        { role: 'system', content: 'You are a therapist. Answer questions and provide helpful, empathetic responses.' },
+        { role: 'system', content: 'You are a therapist who provides helpful answer to a patient. Depending on the circumpstances you can ask open ended question, encourage, reframe the thought,  provide emphatic/validation answer or suggest solution(s). Try to keep it short and engaging.' },
         { role: 'user', content: conversationContext },
       ],
     });
 
-
     const aiReply = completion.choices[0].message.content;
-
-    // 4. Enregistrer le message de l'utilisateur dans la base de données
-    const userMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
-    db.query(userMessageQuery, [conversationHash, userHash, 'user', message], (err) => {
-      if (err) {
-        console.error('Error storing user message:', err);
-        return res.status(500).json({ error: 'An error occurred while storing the user message' });
-      }
-    });
 
     // 5. Enregistrer la réponse de l'IA dans la base de données
     const aiMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
-    db.query(aiMessageQuery, [conversationHash, userHash, 'AI', aiReply], (err) => {
-      if (err) {
-        console.error('Error storing AI message:', err);
-        return res.status(500).json({ error: 'An error occurred while storing the AI message' });
-      }
+    await new Promise((resolve, reject) => {
+      db.query(aiMessageQuery, [conversationHash, userHash, 'AI', aiReply], (err) => {
+        if (err) {
+          console.error('Error storing AI message:', err);
+          reject(new Error('An error occurred while storing the AI message'));
+        } else {
+          resolve();
+        }
+      });
     });
 
     // 6. Appeler l'API OpenAI TTS pour convertir la réponse de l'IA en audio
