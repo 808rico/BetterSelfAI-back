@@ -6,7 +6,14 @@ import db from './db.mjs';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 
-
+const therapistVoicesMap = {
+  woman1: 'alloy',
+  woman2: 'fable',
+  woman3: 'nova',
+  woman4: 'shimmer',
+  man1: 'echo',
+  man2: 'onyx',
+};
 
 const app = express();
 
@@ -161,27 +168,96 @@ app.post('/api/conversations/message', async (req, res) => {
 
 
 
-
-
-// Route pour démarrer une nouvelle conversation
-app.post('/api/conversations/new-conversation', (req, res) => {
+// Route pour démarrer une nouvelle conversation avec un message de bienvenue
+app.post('/api/conversations/new-conversation', async (req, res) => {
   const { userHash } = req.body;
 
   if (!userHash) {
     return res.status(400).json({ error: 'userHash is required' });
   }
 
-  const conversationHash = uuidv4();
-  const query = 'INSERT INTO conversations (conversation_hash, user_hash) VALUES (?, ?)';
+  try {
+    // 1. Récupérer le nom et le voiceId de l'utilisateur à partir de la table 'users'
+    const getUserQuery = 'SELECT name, voice as voiceId FROM users WHERE user_hash = ?';
+    const userResult = await new Promise((resolve, reject) => {
+      db.query(getUserQuery, [userHash], (err, results) => {
+        if (err) {
+          console.error('Error fetching user data:', err);
+          reject(new Error('An error occurred while fetching user data'));
+        } else if (results.length === 0) {
+          reject(new Error('User not found'));
+        } else {
+          resolve(results[0]);
+        }
+      });
+    });
 
-  db.query(query, [conversationHash, userHash], (err, results) => {
-    if (err) {
-      console.error('Error creating conversation:', err);
-      return res.status(500).json({ error: 'An error occurred while creating the conversation' });
+    const { name: userName, voiceId } = userResult;
+
+    // 2. Trouver le modelId correspondant via la correspondance
+    const modelId = therapistVoicesMap[voiceId];
+    if (!modelId) {
+      throw new Error('ModelId not found for the given voiceId');
     }
-    res.status(201).json({ message: 'Conversation created successfully', conversationHash });
-  });
+
+    // 3. Générer un hash de conversation unique
+    const conversationHash = uuidv4();
+    
+    // 4. Insérer une nouvelle conversation dans la base de données
+    const insertConversationQuery = 'INSERT INTO conversations (conversation_hash, user_hash) VALUES (?, ?)';
+    await new Promise((resolve, reject) => {
+      db.query(insertConversationQuery, [conversationHash, userHash], (err) => {
+        if (err) {
+          console.error('Error creating conversation:', err);
+          reject(new Error('An error occurred while creating the conversation'));
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    // 5. Construire le message de bienvenue personnalisé
+    const welcomeMessage = `Hey ${userName}, what's on your mind today?`;
+
+    // 6. Appeler l'API OpenAI TTS pour générer l'audio du message de bienvenue avec le bon modelId
+    const mp3 = await openai.audio.speech.create({
+      model: "tts-1-hd", // Modèle utilisé pour la conversion texte-voix
+      voice: modelId, // ModelId correct récupéré via la correspondance
+      input: welcomeMessage, // Message de bienvenue
+    });
+
+    // Convertir l'ArrayBuffer en base64
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+    const audioBase64 = buffer.toString('base64');
+    const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
+
+    // 7. Stocker le message de bienvenue dans la table "messages"
+    const insertMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
+    await new Promise((resolve, reject) => {
+      db.query(insertMessageQuery, [conversationHash, userHash, 'AI', welcomeMessage], (err) => {
+        if (err) {
+          console.error('Error storing welcome message:', err);
+          reject(new Error('An error occurred while storing the welcome message'));
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    // 8. Retourner le hash de conversation, le message de bienvenue et l'audio
+    res.status(201).json({
+      message: 'Conversation created successfully',
+      conversationHash,
+      welcomeMessage,
+      audio: audioUrl
+    });
+
+  } catch (error) {
+    console.error('Error creating new conversation:', error);
+    res.status(500).json({ error: 'An error occurred while creating the new conversation' });
+  }
 });
+
 
 
 const PORT = process.env.PORT || 5001;
