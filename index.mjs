@@ -6,6 +6,11 @@ import db from './db.mjs';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 
+import adminRouter from './admin.mjs';
+
+const app = express();
+
+
 const therapistVoicesMap = {
   woman1: 'alloy',
   woman2: 'fable',
@@ -15,7 +20,6 @@ const therapistVoicesMap = {
   man2: 'onyx',
 };
 
-const app = express();
 
 // Configure CORS to allow your frontend URL
 const corsOptions = {
@@ -26,6 +30,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+app.use('/admin', adminRouter);
 
 // Initialiser OpenAI avec la clé d'API
 const openai = new OpenAI({
