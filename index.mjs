@@ -5,6 +5,20 @@ import cors from 'cors';
 import db from './db.mjs';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
+import fs from "fs";
+import multer from 'multer';
+import ffmpeg from 'fluent-ffmpeg';
+import path from 'path';
+
+const convertToWav = (inputFile, outputFile) => {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputFile)
+      .toFormat('wav')
+      .save(outputFile)
+      .on('end', () => resolve(outputFile))
+      .on('error', reject);
+  });
+};
 
 const therapistVoicesMap = {
   woman1: 'alloy',
@@ -66,15 +80,68 @@ app.get('/api/users/:userHash', (req, res) => {
 });
 
 
-app.post('/api/conversations/message', async (req, res) => {
-  const { userHash, message, conversationHash, modelId } = req.body;
 
-  if (!userHash || !message || !conversationHash || !modelId) {
-    return res.status(400).json({ error: 'userHash, message, conversationHash, and modelId are required' });
+
+
+
+
+// Configuration de multer pour stocker les fichiers temporairement
+const upload = multer({ dest: 'uploads/' });
+
+app.post('/api/conversations/message', upload.single('message'), async (req, res) => {
+  const { userHash, conversationHash, modelId, type } = req.body;
+
+  if (!userHash || !conversationHash || !modelId || !type) {
+    return res.status(400).json({ error: 'userHash, conversationHash, modelId, and type are required' });
   }
 
+  let messageText = null;
+
   try {
-    // 1. Récupérer les 10 derniers messages de la conversation
+    // 1. Vérifier si le message est du texte ou un fichier audio
+    if (type === 'text') {
+      // Cas du message texte
+      messageText = req.body.message; // Obtenons directement le texte du message
+    } else if (type === 'audio') {
+      const audioFile = req.file;
+      if (!audioFile) {
+        return res.status(400).json({ error: 'Audio file is required' });
+      }
+
+      // Utiliser directement le fichier uploadé au lieu de créer un fichier temporaire supplémentaire
+      const finalFilePath = path.join('uploads', `${uuidv4()}.wav`);
+
+      // Convertir directement le fichier uploadé en wav si nécessaire (s'il n'est pas déjà en wav)
+      if (audioFile.mimetype !== 'audio/wav') {
+        await convertToWav(audioFile.path, finalFilePath);
+      } else {
+        // Si c'est déjà un fichier wav, on peut directement utiliser le fichier uploadé
+        fs.renameSync(audioFile.path, finalFilePath);
+      }
+
+      // Utiliser le fichier wav final pour la transcription
+      const transcription = await openai.audio.transcriptions.create({
+        file: fs.createReadStream(finalFilePath),
+        model: "whisper-1",
+        response_format: "text",
+      });
+
+
+
+      // Stocker la transcription comme message
+      messageText = transcription;
+
+      console.log(transcription)
+
+      // Supprimer le fichier final après la transcription (si vous ne voulez pas le conserver)
+      //await fs.promises.unlink(finalFilePath);
+    } else {
+      return res.status(400).json({ error: 'Invalid message type' });
+    }
+
+    // Si le message texte (soit directement du texte, soit une transcription), procéder au traitement
+
+    // 2. Récupérer les 10 derniers messages de la conversation
     const getLastMessagesQuery = `
       SELECT sender, message FROM messages 
       WHERE conversation_hash = ? 
@@ -93,7 +160,7 @@ app.post('/api/conversations/message', async (req, res) => {
       });
     });
 
-    // 2. Construire le prompt en texte avec les messages récents
+    // 3. Construire le prompt en texte avec les messages récents
     let conversationContext = 'Just answer the message you would say to the user without "". \n \n This is the conversation history between you (the AI) and the user:\n';
     lastMessages.reverse().forEach((msg) => {
       const senderLabel = msg.sender === 'user' ? 'User' : 'You';
@@ -101,12 +168,12 @@ app.post('/api/conversations/message', async (req, res) => {
     });
 
     // Ajouter le message actuel de l'utilisateur
-    conversationContext += `User: ${message}\n`;
+    conversationContext += `User: ${messageText}\n`;
 
-    // 3. Enregistrer le message de l'utilisateur dans la base de données avant de traiter la réponse de l'IA
+    // 4. Enregistrer le message de l'utilisateur dans la base de données avant de traiter la réponse de l'IA
     const userMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
     await new Promise((resolve, reject) => {
-      db.query(userMessageQuery, [conversationHash, userHash, 'user', message], (err) => {
+      db.query(userMessageQuery, [conversationHash, userHash, 'user', messageText], (err) => {
         if (err) {
           console.error('Error storing user message:', err);
           reject(new Error('An error occurred while storing the user message'));
@@ -116,18 +183,18 @@ app.post('/api/conversations/message', async (req, res) => {
       });
     });
 
-    // 4. Appeler OpenAI API pour obtenir la réponse en fournissant tout le contexte sous forme de texte
+    // 5. Appeler OpenAI API pour obtenir la réponse en fournissant tout le contexte sous forme de texte
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
-        { role: 'system', content: 'You are a therapist who provides helpful answer to a patient. Depending on the circumpstances you can ask open ended question, encourage, reframe the thought,  provide emphatic/validation answer or suggest solution(s). Try to keep it short and engaging.' },
+        { role: 'system', content: 'You are a therapist who provides helpful answer to a patient. Depending on the circumpstances you can ask open ended question, encourage, reframe the thought, provide emphatic/validation answer or suggest solution(s). Try to keep it short and engaging.' },
         { role: 'user', content: conversationContext },
       ],
     });
 
     const aiReply = completion.choices[0].message.content;
 
-    // 5. Enregistrer la réponse de l'IA dans la base de données
+    // 6. Enregistrer la réponse de l'IA dans la base de données
     const aiMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
     await new Promise((resolve, reject) => {
       db.query(aiMessageQuery, [conversationHash, userHash, 'AI', aiReply], (err) => {
@@ -140,7 +207,7 @@ app.post('/api/conversations/message', async (req, res) => {
       });
     });
 
-    // 6. Appeler l'API OpenAI TTS pour convertir la réponse de l'IA en audio
+    // 7. Appeler l'API OpenAI TTS pour convertir la réponse de l'IA en audio
     try {
       const mp3 = await openai.audio.speech.create({
         model: "tts-1-hd", // Modèle utilisé pour la conversion texte-voix
@@ -165,6 +232,8 @@ app.post('/api/conversations/message', async (req, res) => {
     res.status(500).json({ error: 'An error occurred while processing the conversation message' });
   }
 });
+
+
 
 
 
