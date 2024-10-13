@@ -31,7 +31,7 @@ router.get('/conversations', async (req, res) => {
 router.get('/conversations/:hash', async (req, res) => {
   const { hash } = req.params;
   const page = parseInt(req.query.page, 10) || 1;
-  const limit = 150;
+  const limit = 1000;
   const offset = (page - 1) * limit;
 
   try {
