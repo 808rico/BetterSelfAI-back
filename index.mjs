@@ -9,6 +9,9 @@ import fs from "fs";
 import multer from 'multer';
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
+import https from 'https';
+
+
 
 const convertToWav = (inputFile, outputFile) => {
   return new Promise((resolve, reject) => {
@@ -37,10 +40,13 @@ const therapistVoicesMap = {
 
 // Configure CORS to allow your frontend URL
 const corsOptions = {
-  origin: ['https://betterselfai.com', 'https://betterselfai.netlify.app', 'http://localhost:3000', 'http://localhost:5173',], // Add other URLs if needed
+  origin: true, // Autorise toutes les origines
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
+
 };
+
+
 
 app.use(cors(corsOptions));
 app.use(express.json());
@@ -335,6 +341,23 @@ app.post('/api/conversations/new-conversation', async (req, res) => {
 
 
 const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+
+// Si USE_HTTPS est défini et que l'environnement est de développement
+if (process.env.USE_HTTPS === 'true') {
+  // Charger les certificats SSL
+  const options = {
+    key: fs.readFileSync(path.resolve('certs/privatekey.pem')),
+    cert: fs.readFileSync(path.resolve('certs/certificate.pem'))
+  };
+
+  // Lancer le serveur HTTPS
+  https.createServer(options, app).listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running with HTTPS on port ${PORT}`);
+  });
+} else {
+  // Lancer le serveur HTTP classique
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
