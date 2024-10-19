@@ -111,7 +111,6 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
   try {
     // 1. Vérifier si le message est du texte ou un fichier audio
     if (type === 'text') {
-      // Cas du message texte
       messageText = req.body.message; // Obtenons directement le texte du message
     } else if (type === 'audio') {
       const audioFile = req.file;
@@ -119,38 +118,25 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
         return res.status(400).json({ error: 'Audio file is required' });
       }
 
-      // Utiliser directement le fichier uploadé au lieu de créer un fichier temporaire supplémentaire
       const finalFilePath = path.join('uploads', `${uuidv4()}.wav`);
 
-      // Convertir directement le fichier uploadé en wav si nécessaire (s'il n'est pas déjà en wav)
       if (audioFile.mimetype !== 'audio/wav') {
         await convertToWav(audioFile.path, finalFilePath);
       } else {
-        // Si c'est déjà un fichier wav, on peut directement utiliser le fichier uploadé
         fs.renameSync(audioFile.path, finalFilePath);
       }
 
-      // Utiliser le fichier wav final pour la transcription
       const transcription = await openai.audio.transcriptions.create({
         file: fs.createReadStream(finalFilePath),
         model: "whisper-1",
         response_format: "text",
       });
 
-
-
-      // Stocker la transcription comme message
       messageText = transcription;
-
-      console.log(transcription)
-
-      // Supprimer le fichier final après la transcription (si vous ne voulez pas le conserver)
-      //await fs.promises.unlink(finalFilePath);
+      console.log(transcription);
     } else {
       return res.status(400).json({ error: 'Invalid message type' });
     }
-
-    // Si le message texte (soit directement du texte, soit une transcription), procéder au traitement
 
     // 2. Récupérer les 10 derniers messages de la conversation
     const getLastMessagesQuery = `
@@ -171,7 +157,27 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    // 3. Construire le prompt en texte avec les messages récents
+    // Compter le nombre de messages de l'utilisateur dans la conversation
+    const userMessagesCountQuery = `
+      SELECT COUNT(*) AS userMessageCount FROM messages 
+      WHERE conversation_hash = ? AND sender = 'user'
+    `;
+    
+
+    const userMessageCountResult = await new Promise((resolve, reject) => {
+      db.query(userMessagesCountQuery, [conversationHash], (err, results) => {
+        if (err) {
+          console.error('Error fetching user message count:', err);
+          reject(new Error('An error occurred while fetching user message count'));
+        } else {
+          resolve(results[0].userMessageCount);
+        }
+      });
+    });
+
+    console.log(userMessageCountResult)
+
+    // 3. Construire le prompt de l'IA
     let conversationContext = 'Just answer the message you would say to the user without "". \n \n This is the conversation history between you (the AI) and the user:\n';
     lastMessages.reverse().forEach((msg) => {
       const senderLabel = msg.sender === 'user' ? 'User' : 'You';
@@ -194,18 +200,27 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    // 5. Appeler OpenAI API pour obtenir la réponse en fournissant tout le contexte sous forme de texte
+    // 5. Déterminer le prompt en fonction du nombre de messages
+    let aiPrompt;
+    if (userMessageCountResult === 10) {
+      aiPrompt = 'You are a therapist who provides helpful answer to a patient. For this message, ask for their email politely, explaining that it’s to follow up with them. Your message should be mainly about the email. Keep it really short and engaging.';
+    
+    } else {
+      aiPrompt = 'You are a therapist who provides helpful answer to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+    }
+
+    // 6. Appeler OpenAI API pour obtenir la réponse
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
-        { role: 'system', content: 'You are a therapist who provides helpful answer to a patient. Depending on the circumpstances you can ask open ended question, encourage, reframe the thought, provide emphatic/validation answer or suggest solution(s). Try to keep it short and engaging.' },
+        { role: 'system', content: aiPrompt },
         { role: 'user', content: conversationContext },
       ],
     });
 
     const aiReply = completion.choices[0].message.content;
 
-    // 6. Enregistrer la réponse de l'IA dans la base de données
+    // 7. Enregistrer la réponse de l'IA dans la base de données
     const aiMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
     await new Promise((resolve, reject) => {
       db.query(aiMessageQuery, [conversationHash, userHash, 'AI', aiReply], (err) => {
@@ -218,15 +233,14 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    // 7. Appeler l'API OpenAI TTS pour convertir la réponse de l'IA en audio
+    // 8. Appeler l'API OpenAI TTS pour convertir la réponse de l'IA en audio
     try {
       const mp3 = await openai.audio.speech.create({
-        model: "tts-1-hd", // Modèle utilisé pour la conversion texte-voix
-        voice: modelId, // ModelId envoyé par le frontend
-        input: aiReply, // Réponse textuelle de l'IA
+        model: "tts-1-hd",
+        voice: modelId,
+        input: aiReply,
       });
 
-      // Convertir le ArrayBuffer en base64
       const buffer = Buffer.from(await mp3.arrayBuffer());
       const audioBase64 = buffer.toString('base64');
       const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
@@ -243,6 +257,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     res.status(500).json({ error: 'An error occurred while processing the conversation message' });
   }
 });
+
 
 
 
