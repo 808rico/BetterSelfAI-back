@@ -10,7 +10,9 @@ import multer from 'multer';
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import https from 'https';
+import { createClient } from "@deepgram/sdk";
 
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 
 const convertToWav = (inputFile, outputFile) => {
@@ -111,7 +113,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
   try {
     // 1. Vérifier si le message est du texte ou un fichier audio
     if (type === 'text') {
-      messageText = req.body.message; // Obtenons directement le texte du message
+      messageText = req.body.message;
     } else if (type === 'audio') {
       const audioFile = req.file;
       if (!audioFile) {
@@ -126,14 +128,25 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
         fs.renameSync(audioFile.path, finalFilePath);
       }
 
-      const transcription = await openai.audio.transcriptions.create({
-        file: fs.createReadStream(finalFilePath),
-        model: "whisper-1",
-        response_format: "text",
+      // Utilisation de Deepgram pour la transcription avec la méthode `transcribeFile`
+      const audioBuffer = fs.readFileSync(finalFilePath);
+
+      const { result, error } = await deepgram.listen.prerecorded.transcribeFile(audioBuffer, {
+        model: "nova-2",  // Utilisez le modèle approprié pour votre cas
       });
 
-      messageText = transcription;
-      console.log(transcription);
+      if (error) {
+        console.error('Error transcribing audio:', error);
+        return res.status(500).json({ error: 'An error occurred while transcribing the audio' });
+      }
+
+      console.log(result.results.channels[0].alternatives[0])
+
+      // Extraction de la transcription du résultat
+      messageText = result.results.channels[0].alternatives[0].transcript;
+
+
+      console.log('Transcription:', messageText);
     } else {
       return res.status(400).json({ error: 'Invalid message type' });
     }
