@@ -43,8 +43,7 @@ const therapistVoicesMap = {
 // Configure CORS to allow your frontend URL
 const corsOptions = {
   origin: true, // Autorise toutes les origines
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE']
 
 };
 
