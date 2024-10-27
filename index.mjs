@@ -157,7 +157,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       ORDER BY created_at DESC 
       LIMIT 20
     `;
-    
+
     const lastMessages = await new Promise((resolve, reject) => {
       db.query(getLastMessagesQuery, [conversationHash], (err, results) => {
         if (err) {
@@ -174,7 +174,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       SELECT COUNT(*) AS userMessageCount FROM messages 
       WHERE conversation_hash = ? AND sender = 'user'
     `;
-    
+
 
     const userMessageCountResult = await new Promise((resolve, reject) => {
       db.query(userMessagesCountQuery, [conversationHash], (err, results) => {
@@ -214,23 +214,27 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 
     // 5. Déterminer le prompt en fonction du nombre de messages
     let aiPrompt;
-    if (userMessageCountResult === 10) {
-      aiPrompt = 'You are a therapist who provides helpful answer to a patient. For this message, ask for their email politely, explaining that it’s to follow up with them. Your message should be mainly about the email. Keep it really short and engaging.';
-    
+    let aiReply;
+
+    if (userMessageCountResult >= 2) {
+      //aiPrompt = 'You are a therapist who provides helpful answer to a patient. For this message, ask for their email politely, explaining that it’s to follow up with them. Your message should be mainly about the email. Keep it really short and engaging.';
+      aiReply = 'Please log in to talk more';
+
     } else {
       aiPrompt = 'You are a therapist who provides helpful answer to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+      // 6. Appeler OpenAI API pour obtenir la réponse
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: 'system', content: aiPrompt },
+          { role: 'user', content: conversationContext },
+        ],
+      });
+
+      aiReply = completion.choices[0].message.content;
     }
 
-    // 6. Appeler OpenAI API pour obtenir la réponse
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: 'system', content: aiPrompt },
-        { role: 'user', content: conversationContext },
-      ],
-    });
 
-    const aiReply = completion.choices[0].message.content;
 
     // 7. Enregistrer la réponse de l'IA dans la base de données
     const aiMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
@@ -309,7 +313,7 @@ app.post('/api/conversations/new-conversation', async (req, res) => {
 
     // 3. Générer un hash de conversation unique
     const conversationHash = uuidv4();
-    
+
     // 4. Insérer une nouvelle conversation dans la base de données
     const insertConversationQuery = 'INSERT INTO conversations (conversation_hash, user_hash) VALUES (?, ?)';
     await new Promise((resolve, reject) => {
