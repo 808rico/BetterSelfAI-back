@@ -11,6 +11,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import https from 'https';
 import { createClient } from "@deepgram/sdk";
+import { clerkMiddleware, getAuth } from '@clerk/express';
 
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
@@ -28,6 +29,7 @@ const convertToWav = (inputFile, outputFile) => {
 import adminRouter from './admin.mjs';
 
 const app = express();
+
 
 
 const therapistVoicesMap = {
@@ -48,7 +50,7 @@ const corsOptions = {
 };
 
 
-
+app.use(clerkMiddleware());
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use('/admin', adminRouter);
@@ -105,6 +107,15 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 
   if (!userHash || !conversationHash || !modelId || !type) {
     return res.status(400).json({ error: 'userHash, conversationHash, modelId, and type are required' });
+  }
+
+
+  const auth = getAuth(req);
+  // Afficher dans la console si l'utilisateur est authentifié
+  if (auth.userId) {
+    console.log(`User is authenticated with userId: ${auth.userId}`);
+  } else {
+    console.log('User is not authenticated');
   }
 
   let messageText = null;
@@ -215,8 +226,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     // 5. Déterminer le prompt en fonction du nombre de messages
     let aiPrompt;
     let aiReply;
-
-    if (userMessageCountResult >= 2) {
+    if (userMessageCountResult >= 2 && !auth.userId) {
       //aiPrompt = 'You are a therapist who provides helpful answer to a patient. For this message, ask for their email politely, explaining that it’s to follow up with them. Your message should be mainly about the email. Keep it really short and engaging.';
       aiReply = 'Please log in to talk more';
 
