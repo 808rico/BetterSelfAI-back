@@ -75,23 +75,66 @@ app.post('/api/users', (req, res) => {
 });
 
 // Route pour récupérer les informations de l'utilisateur via userHash
+// Route pour récupérer les informations de l'utilisateur et les 100 derniers messages de la première conversation
 app.get('/api/users/:userHash', (req, res) => {
   const { userHash } = req.params;
 
-  const query = 'SELECT * FROM users WHERE user_hash = ?';
-  db.query(query, [userHash], (err, results) => {
-    if (err) {
-      console.error('Error fetching user data:', err);
+  // Récupérer les informations de l'utilisateur
+  const userQuery = 'SELECT * FROM users WHERE user_hash = ?';
+  db.query(userQuery, [userHash], (userErr, userResults) => {
+    if (userErr) {
+      console.error('Error fetching user data:', userErr);
       return res.status(500).json({ error: 'An error occurred while fetching user data' });
     }
 
-    if (results.length === 0) {
+    if (userResults.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.status(200).json(results[0]);
+    const userInfo = userResults[0];
+
+    // Récupérer la première conversation de l'utilisateur
+    const conversationQuery = 'SELECT conversation_hash FROM conversations WHERE user_hash = ? ORDER BY created_at ASC LIMIT 1';
+    db.query(conversationQuery, [userHash], (convErr, convResults) => {
+      if (convErr) {
+        console.error('Error fetching conversation data:', convErr);
+        return res.status(500).json({ error: 'An error occurred while fetching conversation data' });
+      }
+
+      if (convResults.length === 0) {
+        return res.status(404).json({ error: 'No conversation found for this user' });
+      }
+
+      const conversationHash = convResults[0].conversation_hash;
+
+      // Récupérer les 100 derniers messages de la première conversation
+      const messagesQuery = `
+        SELECT sender, message, created_at FROM messages 
+        WHERE conversation_hash = ? 
+        ORDER BY created_at DESC 
+        LIMIT 100
+      `;
+      db.query(messagesQuery, [conversationHash], (msgErr, msgResults) => {
+        if (msgErr) {
+          console.error('Error fetching messages:', msgErr);
+          return res.status(500).json({ error: 'An error occurred while fetching messages' });
+        }
+
+        // Ajouter type: 'text' et renommer message en content pour chaque message
+        const messages = msgResults.map(msg => ({
+          sender: msg.sender,
+          content: msg.message,  // Renommer 'message' en 'content'
+          created_at: msg.created_at,
+          type: 'text'  // Ajouter type 'text' pour chaque message
+        })).reverse(); // Inverser l'ordre pour afficher du plus ancien au plus récent
+
+        res.status(200).json({ userInfo, messages });
+      });
+    });
   });
 });
+
+
 
 
 
