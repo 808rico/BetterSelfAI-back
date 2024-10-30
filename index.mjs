@@ -11,7 +11,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import https from 'https';
 import { createClient } from "@deepgram/sdk";
-import { clerkMiddleware, getAuth } from '@clerk/express';
+import { clerkMiddleware, getAuth, requireAuth } from '@clerk/express';
 
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
@@ -136,6 +136,61 @@ app.get('/api/users/:userHash', (req, res) => {
 
 
 
+app.post('/api/users/switch-user-hash', requireAuth(), (req, res) => {
+  // Récupérer l'userID authentifié depuis Clerk
+  const userID = req.auth.userId;
+  const { oldUserHash } = req.body; // On reçoit l'ancien userHash depuis le corps de la requête
+  console.log('skurt');
+  console.log(userID);
+
+  // Vérifier que oldUserHash est fourni
+  if (!oldUserHash) {
+    return res.status(400).json({ error: 'Old userHash is required' });
+  }
+
+  // Vérifier si l'userID est déjà présent dans la table users
+  const checkUserExistsQuery = 'SELECT 1 FROM users WHERE user_hash = ? LIMIT 1';
+  db.query(checkUserExistsQuery, [userID], (checkErr, checkResult) => {
+    if (checkErr) {
+      console.error('Error checking user existence:', checkErr);
+      return res.status(500).json({ error: 'An error occurred while checking user existence' });
+    }
+
+    // Si l'userID est déjà présent, ne rien faire et renvoyer 200
+    if (checkResult.length > 0) {
+      return res.status(200).json({ message: 'UserID already present, no update needed' });
+    }
+
+    // Mettre à jour le user_hash dans les tables si l'userID n'est pas trouvé
+    const updateUserHashQuery = 'UPDATE users SET user_hash = ? WHERE user_hash = ?';
+    db.query(updateUserHashQuery, [userID, oldUserHash], (userErr, userResult) => {
+      if (userErr) {
+        console.error('Error updating user data:', userErr);
+        return res.status(500).json({ error: 'An error occurred while updating user data' });
+      }
+
+      const updateConversationsQuery = 'UPDATE conversations SET user_hash = ? WHERE user_hash = ?';
+      db.query(updateConversationsQuery, [userID, oldUserHash], (convErr, convResult) => {
+        if (convErr) {
+          console.error('Error updating conversation data:', convErr);
+          return res.status(500).json({ error: 'An error occurred while updating conversation data' });
+        }
+
+        const updateMessagesQuery = 'UPDATE messages SET user_hash = ? WHERE user_hash = ?';
+        db.query(updateMessagesQuery, [userID, oldUserHash], (msgErr, msgResult) => {
+          if (msgErr) {
+            console.error('Error updating messages data:', msgErr);
+            return res.status(500).json({ error: 'An error occurred while updating messages data' });
+          }
+
+          res.status(200).json({
+            message: 'User hash updated successfully across users, conversations, and messages tables'
+          });
+        });
+      });
+    });
+  });
+});
 
 
 
