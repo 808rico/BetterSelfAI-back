@@ -60,19 +60,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Route pour recevoir les données de l'utilisateur
-app.post('/api/users', (req, res) => {
-  const { name, photo, voice, userHash } = req.body;
 
-  const query = 'INSERT INTO users (name, photo, voice, user_hash) VALUES (?, ?, ?, ?)';
-  db.query(query, [name, photo, voice, userHash], (err, results) => {
-    if (err) {
-      console.error('Error inserting user:', err);
-      return res.status(500).json({ error: 'An error occurred while saving user data' });
-    }
-    res.status(201).json({ message: 'User data saved successfully', data: results });
-  });
-});
 
 // Route pour récupérer les informations de l'utilisateur via userHash
 // Route pour récupérer les informations de l'utilisateur et les 100 derniers messages de la première conversation
@@ -176,17 +164,10 @@ app.post('/api/users/switch-user-hash', requireAuth(), (req, res) => {
           return res.status(500).json({ error: 'An error occurred while updating conversation data' });
         }
 
-        const updateMessagesQuery = 'UPDATE messages SET user_hash = ? WHERE user_hash = ?';
-        db.query(updateMessagesQuery, [userID, oldUserHash], (msgErr, msgResult) => {
-          if (msgErr) {
-            console.error('Error updating messages data:', msgErr);
-            return res.status(500).json({ error: 'An error occurred while updating messages data' });
-          }
-
-          res.status(200).json({
-            message: 'User hash updated successfully across users, conversations, and messages tables'
-          });
+        res.status(200).json({
+          message: 'User hash updated successfully across users, conversations, and messages tables'
         });
+
       });
     });
   });
@@ -199,17 +180,15 @@ app.post('/api/users/switch-user-hash', requireAuth(), (req, res) => {
 
 // Configuration de multer pour stocker les fichiers temporairement
 const upload = multer({ dest: 'uploads/' });
-
+//A MODIFIER: il faut prendre en entré que le user_hash puis requeter la bdd pour trouver la conv et les messages
 app.post('/api/conversations/message', upload.single('message'), async (req, res) => {
-  const { userHash, conversationHash, modelId, type } = req.body;
+  const { userHash, modelId, type } = req.body;
 
-  if (!userHash || !conversationHash || !modelId || !type) {
-    return res.status(400).json({ error: 'userHash, conversationHash, modelId, and type are required' });
+  if (!userHash || !modelId || !type) {
+    return res.status(400).json({ error: 'userHash, modelId, and type are required' });
   }
 
-
   const auth = getAuth(req);
-  // Afficher dans la console si l'utilisateur est authentifié
   if (auth.userId) {
     console.log(`User is authenticated with userId: ${auth.userId}`);
   } else {
@@ -217,9 +196,29 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
   }
 
   let messageText = null;
+  let conversationHash = null;
 
   try {
-    // 1. Vérifier si le message est du texte ou un fichier audio
+    // 1. Récupérer le conversationHash pour cet utilisateur
+    const getConversationHashQuery = `
+      SELECT conversation_hash FROM conversations WHERE user_hash = ? ORDER BY created_at DESC LIMIT 1
+    `;
+    const conversationResult = await new Promise((resolve, reject) => {
+      db.query(getConversationHashQuery, [userHash], (err, results) => {
+        if (err) {
+          console.error('Error fetching conversationHash:', err);
+          reject(new Error('An error occurred while fetching conversationHash'));
+        } else if (results.length === 0) {
+          reject(new Error('No active conversation found for this user'));
+        } else {
+          resolve(results[0].conversation_hash);
+        }
+      });
+    });
+
+    conversationHash = conversationResult;
+
+    // 2. Vérifier si le message est du texte ou un fichier audio
     if (type === 'text') {
       messageText = req.body.message;
     } else if (type === 'audio') {
@@ -236,11 +235,10 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
         fs.renameSync(audioFile.path, finalFilePath);
       }
 
-      // Utilisation de Deepgram pour la transcription avec la méthode `transcribeFile`
       const audioBuffer = fs.readFileSync(finalFilePath);
 
       const { result, error } = await deepgram.listen.prerecorded.transcribeFile(audioBuffer, {
-        model: "nova-2",  // Utilisez le modèle approprié pour votre cas
+        model: "nova-2",
       });
 
       if (error) {
@@ -248,18 +246,13 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
         return res.status(500).json({ error: 'An error occurred while transcribing the audio' });
       }
 
-      console.log(result.results.channels[0].alternatives[0])
-
-      // Extraction de la transcription du résultat
       messageText = result.results.channels[0].alternatives[0].transcript;
-
-
       console.log('Transcription:', messageText);
     } else {
       return res.status(400).json({ error: 'Invalid message type' });
     }
 
-    // 2. Récupérer les 10 derniers messages de la conversation
+    // 3. Récupérer les 10 derniers messages de la conversation
     const getLastMessagesQuery = `
       SELECT sender, message FROM messages 
       WHERE conversation_hash = ? 
@@ -278,12 +271,10 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    // Compter le nombre de messages de l'utilisateur dans la conversation
     const userMessagesCountQuery = `
       SELECT COUNT(*) AS userMessageCount FROM messages 
       WHERE conversation_hash = ? AND sender = 'user'
     `;
-
 
     const userMessageCountResult = await new Promise((resolve, reject) => {
       db.query(userMessagesCountQuery, [conversationHash], (err, results) => {
@@ -296,22 +287,17 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    console.log(userMessageCountResult)
-
-    // 3. Construire le prompt de l'IA
     let conversationContext = 'Just answer the message you would say to the user without "". \n \n This is the conversation history between you (the AI) and the user:\n';
     lastMessages.reverse().forEach((msg) => {
       const senderLabel = msg.sender === 'user' ? 'User' : 'You';
       conversationContext += `${senderLabel}: ${msg.message}\n`;
     });
 
-    // Ajouter le message actuel de l'utilisateur
     conversationContext += `User: ${messageText}\n`;
 
-    // 4. Enregistrer le message de l'utilisateur dans la base de données avant de traiter la réponse de l'IA
-    const userMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
+    const userMessageQuery = 'INSERT INTO messages (conversation_hash,  sender, message) VALUES (?, ?, ?)';
     await new Promise((resolve, reject) => {
-      db.query(userMessageQuery, [conversationHash, userHash, 'user', messageText], (err) => {
+      db.query(userMessageQuery, [conversationHash, 'user', messageText], (err) => {
         if (err) {
           console.error('Error storing user message:', err);
           reject(new Error('An error occurred while storing the user message'));
@@ -321,13 +307,10 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    // 5. Déterminer le prompt en fonction du nombre de messages
     let aiPrompt;
     let aiReply;
     if (userMessageCountResult >= 2 && !auth.userId) {
-      //aiPrompt = 'You are a therapist who provides helpful answer to a patient. For this message, ask for their email politely, explaining that it’s to follow up with them. Your message should be mainly about the email. Keep it really short and engaging.';
       aiReply = 'Please log in to talk more';
-
     } else {
       aiPrompt = 'You are a therapist who provides helpful answer to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
       // 6. Appeler OpenAI API pour obtenir la réponse
@@ -338,16 +321,12 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
           { role: 'user', content: conversationContext },
         ],
       });
-
       aiReply = completion.choices[0].message.content;
     }
 
-
-
-    // 7. Enregistrer la réponse de l'IA dans la base de données
-    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
+    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES ( ?, ?, ?)';
     await new Promise((resolve, reject) => {
-      db.query(aiMessageQuery, [conversationHash, userHash, 'AI', aiReply], (err) => {
+      db.query(aiMessageQuery, [conversationHash, 'AI', aiReply], (err) => {
         if (err) {
           console.error('Error storing AI message:', err);
           reject(new Error('An error occurred while storing the AI message'));
@@ -357,7 +336,6 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    // 8. Appeler l'API OpenAI TTS pour convertir la réponse de l'IA en audio
     try {
       const mp3 = await openai.audio.speech.create({
         model: "tts-1-hd",
@@ -369,7 +347,6 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       const audioBase64 = buffer.toString('base64');
       const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
 
-      // Retourner la réponse textuelle et l'audio
       res.status(200).json({ reply: aiReply, audio: audioUrl });
     } catch (openaiTtsError) {
       console.error('Error with OpenAI TTS API:', openaiTtsError);
@@ -385,44 +362,35 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 
 
 
+app.post('/api/new-user', async (req, res) => {
+  const { name, photo, voice, userHash } = req.body;
 
-
-// Route pour démarrer une nouvelle conversation avec un message de bienvenue
-app.post('/api/conversations/new-conversation', async (req, res) => {
-  const { userHash } = req.body;
-
-  if (!userHash) {
-    return res.status(400).json({ error: 'userHash is required' });
-  }
+  // Étape 1 : Insérer les informations utilisateur dans la base de données
+  const insertUserQuery = 'INSERT INTO users (name, photo, voice, user_hash) VALUES (?, ?, ?, ?)';
 
   try {
-    // 1. Récupérer le nom et le voiceId de l'utilisateur à partir de la table 'users'
-    const getUserQuery = 'SELECT name, voice as voiceId FROM users WHERE user_hash = ?';
-    const userResult = await new Promise((resolve, reject) => {
-      db.query(getUserQuery, [userHash], (err, results) => {
+    await new Promise((resolve, reject) => {
+      db.query(insertUserQuery, [name, photo, voice, userHash], (err, results) => {
         if (err) {
-          console.error('Error fetching user data:', err);
-          reject(new Error('An error occurred while fetching user data'));
-        } else if (results.length === 0) {
-          reject(new Error('User not found'));
+          console.error('Error inserting user:', err);
+          reject(new Error('An error occurred while saving user data'));
         } else {
-          resolve(results[0]);
+          resolve(results);
         }
       });
     });
+    console.log('User data saved successfully');
 
-    const { name: userName, voiceId } = userResult;
-
-    // 2. Trouver le modelId correspondant via la correspondance
-    const modelId = therapistVoicesMap[voiceId];
+    // Étape 2 : Vérifier le modelId correspondant au voice
+    const modelId = therapistVoicesMap[voice];
     if (!modelId) {
-      throw new Error('ModelId not found for the given voiceId');
+      throw new Error('ModelId not found for the given voice');
     }
 
-    // 3. Générer un hash de conversation unique
+    // Étape 3 : Générer un hash de conversation unique
     const conversationHash = uuidv4();
 
-    // 4. Insérer une nouvelle conversation dans la base de données
+    // Étape 4 : Insérer la conversation dans la base de données
     const insertConversationQuery = 'INSERT INTO conversations (conversation_hash, user_hash) VALUES (?, ?)';
     await new Promise((resolve, reject) => {
       db.query(insertConversationQuery, [conversationHash, userHash], (err) => {
@@ -435,25 +403,24 @@ app.post('/api/conversations/new-conversation', async (req, res) => {
       });
     });
 
-    // 5. Construire le message de bienvenue personnalisé
-    const welcomeMessage = `Hey ${userName}, what's on your mind today?`;
+    // Étape 5 : Construire le message de bienvenue personnalisé
+    const welcomeMessage = `Hey ${name}, what's on your mind today?`;
 
-    // 6. Appeler l'API OpenAI TTS pour générer l'audio du message de bienvenue avec le bon modelId
+    // Étape 6 : Générer l'audio du message de bienvenue
     const mp3 = await openai.audio.speech.create({
-      model: "tts-1-hd", // Modèle utilisé pour la conversion texte-voix
-      voice: modelId, // ModelId correct récupéré via la correspondance
-      input: welcomeMessage, // Message de bienvenue
+      model: "tts-1-hd",
+      voice: modelId,
+      input: welcomeMessage,
     });
 
-    // Convertir l'ArrayBuffer en base64
     const buffer = Buffer.from(await mp3.arrayBuffer());
     const audioBase64 = buffer.toString('base64');
     const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
 
-    // 7. Stocker le message de bienvenue dans la table "messages"
-    const insertMessageQuery = 'INSERT INTO messages (conversation_hash, user_hash, sender, message) VALUES (?, ?, ?, ?)';
+    // Étape 7 : Enregistrer le message de bienvenue dans la table "messages"
+    const insertMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES (?,  ?, ?)';
     await new Promise((resolve, reject) => {
-      db.query(insertMessageQuery, [conversationHash, userHash, 'AI', welcomeMessage], (err) => {
+      db.query(insertMessageQuery, [conversationHash, 'AI', welcomeMessage], (err) => {
         if (err) {
           console.error('Error storing welcome message:', err);
           reject(new Error('An error occurred while storing the welcome message'));
@@ -463,17 +430,17 @@ app.post('/api/conversations/new-conversation', async (req, res) => {
       });
     });
 
-    // 8. Retourner le hash de conversation, le message de bienvenue et l'audio
+    // Étape 8 : Retourner le hash de conversation, le message de bienvenue et l'audio
     res.status(201).json({
-      message: 'Conversation created successfully',
+      message: 'User and conversation created successfully',
       conversationHash,
       welcomeMessage,
       audio: audioUrl
     });
 
   } catch (error) {
-    console.error('Error creating new conversation:', error);
-    res.status(500).json({ error: 'An error occurred while creating the new conversation' });
+    console.error('Error in new-user route:', error);
+    res.status(500).json({ error: 'An error occurred while creating the user and conversation' });
   }
 });
 
