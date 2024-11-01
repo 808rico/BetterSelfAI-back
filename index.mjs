@@ -450,9 +450,9 @@ app.post('/api/new-user', async (req, res) => {
     const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
 
     // Étape 8 : Enregistrer le message de bienvenue dans la table "messages"
-    const insertMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES (?,  ?, ?)';
+    const insertMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message, message_type) VALUES (?,  ?, ?,?)';
     await new Promise((resolve, reject) => {
-      db.query(insertMessageQuery, [conversationHash, 'AI', welcomeMessage], (err) => {
+      db.query(insertMessageQuery, [conversationHash, 'AI', welcomeMessage, 'text'], (err) => {
         if (err) {
           console.error('Error storing welcome message:', err);
           reject(new Error('An error occurred while storing the welcome message'));
