@@ -123,6 +123,33 @@ app.get('/api/users/:userHash', (req, res) => {
 });
 
 
+app.get('/api/users/check-user/:userId', (req, res) => {
+  const { userId } = req.params;
+
+  // Vérifier si l'utilisateur existe dans la base de données et récupérer les colonnes name, photo, et voice
+  const query = 'SELECT name, photo, voice FROM users WHERE user_hash = ?';
+  db.query(query, [userId], (err, results) => {
+    if (err) {
+      console.error('Erreur lors de la récupération des données utilisateur :', err);
+      return res.status(500).json({ error: 'Une erreur est survenue lors de la vérification de l\'utilisateur' });
+    }
+
+    // Vérifier si des résultats ont été trouvés
+    if (results.length > 0) {
+      const user = results[0];
+      return res.status(200).json({
+        exists: true,
+        name: user.name,
+        photo: user.photo,
+        voice: user.voice
+      });
+    } else {
+      return res.status(200).json({ exists: false });
+    }
+  });
+});
+
+
 
 app.post('/api/users/switch-user-hash', requireAuth(), (req, res) => {
   // Récupérer l'userID authentifié depuis Clerk
