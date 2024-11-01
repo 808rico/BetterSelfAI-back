@@ -380,10 +380,27 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 app.post('/api/new-user', async (req, res) => {
   const { name, photo, voice, userHash } = req.body;
 
-  // Étape 1 : Insérer les informations utilisateur dans la base de données
-  const insertUserQuery = 'INSERT INTO users (name, photo, voice, user_hash) VALUES (?, ?, ?, ?)';
+  // Étape 1 : Vérifier si l'utilisateur existe déjà dans la base de données
+  const checkUserQuery = 'SELECT * FROM users WHERE user_hash = ?';
 
   try {
+    const userExists = await new Promise((resolve, reject) => {
+      db.query(checkUserQuery, [userHash], (err, results) => {
+        if (err) {
+          console.error('Error checking user existence:', err);
+          reject(new Error('An error occurred while checking user existence'));
+        } else {
+          resolve(results.length > 0);
+        }
+      });
+    });
+
+    if (userExists) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    // Étape 2 : Insérer les informations utilisateur dans la base de données
+    const insertUserQuery = 'INSERT INTO users (name, photo, voice, user_hash) VALUES (?, ?, ?, ?)';
     await new Promise((resolve, reject) => {
       db.query(insertUserQuery, [name, photo, voice, userHash], (err, results) => {
         if (err) {
@@ -396,16 +413,16 @@ app.post('/api/new-user', async (req, res) => {
     });
     console.log('User data saved successfully');
 
-    // Étape 2 : Vérifier le modelId correspondant au voice
+    // Étape 3 : Vérifier le modelId correspondant au voice
     const modelId = therapistVoicesMap[voice];
     if (!modelId) {
       throw new Error('ModelId not found for the given voice');
     }
 
-    // Étape 3 : Générer un hash de conversation unique
+    // Étape 4 : Générer un hash de conversation unique
     const conversationHash = uuidv4();
 
-    // Étape 4 : Insérer la conversation dans la base de données
+    // Étape 5 : Insérer la conversation dans la base de données
     const insertConversationQuery = 'INSERT INTO conversations (conversation_hash, user_hash) VALUES (?, ?)';
     await new Promise((resolve, reject) => {
       db.query(insertConversationQuery, [conversationHash, userHash], (err) => {
@@ -418,10 +435,10 @@ app.post('/api/new-user', async (req, res) => {
       });
     });
 
-    // Étape 5 : Construire le message de bienvenue personnalisé
+    // Étape 6 : Construire le message de bienvenue personnalisé
     const welcomeMessage = `Hey ${name}, what's on your mind today?`;
 
-    // Étape 6 : Générer l'audio du message de bienvenue
+    // Étape 7 : Générer l'audio du message de bienvenue
     const mp3 = await openai.audio.speech.create({
       model: "tts-1-hd",
       voice: modelId,
@@ -432,7 +449,7 @@ app.post('/api/new-user', async (req, res) => {
     const audioBase64 = buffer.toString('base64');
     const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
 
-    // Étape 7 : Enregistrer le message de bienvenue dans la table "messages"
+    // Étape 8 : Enregistrer le message de bienvenue dans la table "messages"
     const insertMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES (?,  ?, ?)';
     await new Promise((resolve, reject) => {
       db.query(insertMessageQuery, [conversationHash, 'AI', welcomeMessage], (err) => {
@@ -445,7 +462,7 @@ app.post('/api/new-user', async (req, res) => {
       });
     });
 
-    // Étape 8 : Retourner le hash de conversation, le message de bienvenue et l'audio
+    // Étape 9 : Retourner le hash de conversation, le message de bienvenue et l'audio
     res.status(201).json({
       message: 'User and conversation created successfully',
       conversationHash,
@@ -458,6 +475,7 @@ app.post('/api/new-user', async (req, res) => {
     res.status(500).json({ error: 'An error occurred while creating the user and conversation' });
   }
 });
+
 
 
 
