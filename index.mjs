@@ -279,10 +279,10 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       return res.status(400).json({ error: 'Invalid message type' });
     }
 
-    // 3. Insérer le message de l'utilisateur dans la base de données avant de générer la réponse de l'IA
-    const userMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES (?, ?, ?)';
+    // 3. Insérer le message de l'utilisateur dans la base de données avec le type de message
+    const userMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message, message_type) VALUES (?, ?, ?, ?)';
     await new Promise((resolve, reject) => {
-      db.query(userMessageQuery, [conversationHash, 'user', messageText], (err) => {
+      db.query(userMessageQuery, [conversationHash, 'user', messageText, type], (err) => {
         if (err) {
           console.error('Error storing user message:', err);
           reject(new Error('An error occurred while storing the user message'));
@@ -336,10 +336,10 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       aiReply = 'Please log in to talk more';
     }
 
-    // 6. Insérer le message de l'IA dans la base de données après l'insertion du message de l'utilisateur
-    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES (?, ?, ?)';
+    // 6. Insérer le message de l'IA dans la base de données avec le type de message text
+    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message, message_type) VALUES (?, ?, ?, ?)';
     await new Promise((resolve, reject) => {
-      db.query(aiMessageQuery, [conversationHash, 'AI', aiReply], (err) => {
+      db.query(aiMessageQuery, [conversationHash, 'AI', aiReply, 'text'], (err) => {
         if (err) {
           console.error('Error storing AI message:', err);
           reject(new Error('An error occurred while storing the AI message'));
