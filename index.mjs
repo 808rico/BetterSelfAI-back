@@ -279,7 +279,20 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       return res.status(400).json({ error: 'Invalid message type' });
     }
 
-    // 3. Récupérer les 10 derniers messages de la conversation
+    // 3. Insérer le message de l'utilisateur dans la base de données avant de générer la réponse de l'IA
+    const userMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES (?, ?, ?)';
+    await new Promise((resolve, reject) => {
+      db.query(userMessageQuery, [conversationHash, 'user', messageText], (err) => {
+        if (err) {
+          console.error('Error storing user message:', err);
+          reject(new Error('An error occurred while storing the user message'));
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    // 4. Créer le contexte pour l'IA
     const getLastMessagesQuery = `
       SELECT sender, message FROM messages 
       WHERE conversation_hash = ? 
@@ -298,22 +311,6 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
-    const userMessagesCountQuery = `
-      SELECT COUNT(*) AS userMessageCount FROM messages 
-      WHERE conversation_hash = ? AND sender = 'user'
-    `;
-
-    const userMessageCountResult = await new Promise((resolve, reject) => {
-      db.query(userMessagesCountQuery, [conversationHash], (err, results) => {
-        if (err) {
-          console.error('Error fetching user message count:', err);
-          reject(new Error('An error occurred while fetching user message count'));
-        } else {
-          resolve(results[0].userMessageCount);
-        }
-      });
-    });
-
     let conversationContext = 'Just answer the message you would say to the user without "". \n \n This is the conversation history between you (the AI) and the user:\n';
     lastMessages.reverse().forEach((msg) => {
       const senderLabel = msg.sender === 'user' ? 'User' : 'You';
@@ -322,25 +319,11 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 
     conversationContext += `User: ${messageText}\n`;
 
-    const userMessageQuery = 'INSERT INTO messages (conversation_hash,  sender, message) VALUES (?, ?, ?)';
-    await new Promise((resolve, reject) => {
-      db.query(userMessageQuery, [conversationHash, 'user', messageText], (err) => {
-        if (err) {
-          console.error('Error storing user message:', err);
-          reject(new Error('An error occurred while storing the user message'));
-        } else {
-          resolve();
-        }
-      });
-    });
-
-    let aiPrompt;
     let aiReply;
-    if (userMessageCountResult >= 2 && !auth.userId) {
-      aiReply = 'Please log in to talk more';
-    } else {
-      aiPrompt = 'You are a therapist who provides helpful answer to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
-      // 6. Appeler OpenAI API pour obtenir la réponse
+    if (auth.userId || lastMessages.filter(msg => msg.sender === 'user').length < 2) {
+      const aiPrompt = 'You are a therapist who provides helpful answer to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+
+      // 5. Appeler OpenAI API pour obtenir la réponse de l'IA
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
@@ -349,9 +332,12 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
         ],
       });
       aiReply = completion.choices[0].message.content;
+    } else {
+      aiReply = 'Please log in to talk more';
     }
 
-    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES ( ?, ?, ?)';
+    // 6. Insérer le message de l'IA dans la base de données après l'insertion du message de l'utilisateur
+    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message) VALUES (?, ?, ?)';
     await new Promise((resolve, reject) => {
       db.query(aiMessageQuery, [conversationHash, 'AI', aiReply], (err) => {
         if (err) {
@@ -363,6 +349,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
+    // 7. Générer l'audio de la réponse de l'IA
     try {
       const mp3 = await openai.audio.speech.create({
         model: "tts-1-hd",
@@ -385,6 +372,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     res.status(500).json({ error: 'An error occurred while processing the conversation message' });
   }
 });
+
 
 
 
