@@ -230,7 +230,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     const getConversationHashQuery = `
       SELECT conversation_hash FROM conversations WHERE user_hash = ? ORDER BY created_at DESC LIMIT 1
     `;
-    const conversationResult = await new Promise((resolve, reject) => {
+    conversationHash = await new Promise((resolve, reject) => {
       db.query(getConversationHashQuery, [userHash], (err, results) => {
         if (err) {
           console.error('Error fetching conversationHash:', err);
@@ -242,8 +242,6 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
         }
       });
     });
-
-    conversationHash = conversationResult;
 
     // 2. Vérifier si le message est du texte ou un fichier audio
     if (type === 'text') {
@@ -279,10 +277,11 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       return res.status(400).json({ error: 'Invalid message type' });
     }
 
-    // 3. Insérer le message de l'utilisateur dans la base de données avec le type de message
-    const userMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message, message_type) VALUES (?, ?, ?, ?)';
+    // 3. Insérer le message de l'utilisateur avec le timestamp actuel
+    const userMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message, message_type, created_at) VALUES (?, ?, ?, ?, ?)';
+    const currentTimestamp = new Date(); // Timestamp actuel
     await new Promise((resolve, reject) => {
-      db.query(userMessageQuery, [conversationHash, 'user', messageText, type], (err) => {
+      db.query(userMessageQuery, [conversationHash, 'user', messageText, type, currentTimestamp], (err) => {
         if (err) {
           console.error('Error storing user message:', err);
           reject(new Error('An error occurred while storing the user message'));
@@ -299,7 +298,6 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       ORDER BY created_at DESC 
       LIMIT 20
     `;
-
     const lastMessages = await new Promise((resolve, reject) => {
       db.query(getLastMessagesQuery, [conversationHash], (err, results) => {
         if (err) {
@@ -320,26 +318,32 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     conversationContext += `User: ${messageText}\n`;
 
     let aiReply;
-    if (auth.userId || lastMessages.filter(msg => msg.sender === 'user').length < 2) {
-      const aiPrompt = 'You are a therapist who provides helpful answer to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+    const userMessagesCount = lastMessages.filter(msg => msg.sender === 'user').length;
 
-      // 5. Appeler OpenAI API pour obtenir la réponse de l'IA
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: 'system', content: aiPrompt },
-          { role: 'user', content: conversationContext },
-        ],
-      });
-      aiReply = completion.choices[0].message.content;
+    let aiPrompt;
+    if (userMessagesCount < 8) {
+      aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
     } else {
-      aiReply = 'Please log in to talk more';
+      aiPrompt = 'You are a therapist. Your goal is to make people login to the service to keep chatting with you. You can not answer to the user query, your goal is to make the user to login. Once the user will be logged in he will be able to keep talking to you. The login button is at the top right corner of the screen. Keep it short and engaging.';
     }
 
-    // 6. Insérer le message de l'IA dans la base de données avec le type de message text
-    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message, message_type) VALUES (?, ?, ?, ?)';
+    // Appeler OpenAI API pour obtenir la réponse de l'IA avec le prompt approprié
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: 'system', content: aiPrompt },
+        { role: 'user', content: conversationContext },
+      ],
+    });
+
+    aiReply = completion.choices[0].message.content;
+
+
+    // 6. Insérer le message de l'IA avec un timestamp incrémenté de 1 seconde
+    const aiTimestamp = new Date(currentTimestamp.getTime() + 1000); // Ajouter 1 seconde
+    const aiMessageQuery = 'INSERT INTO messages (conversation_hash, sender, message, message_type, created_at) VALUES (?, ?, ?, ?, ?)';
     await new Promise((resolve, reject) => {
-      db.query(aiMessageQuery, [conversationHash, 'AI', aiReply, 'text'], (err) => {
+      db.query(aiMessageQuery, [conversationHash, 'AI', aiReply, 'text', aiTimestamp], (err) => {
         if (err) {
           console.error('Error storing AI message:', err);
           reject(new Error('An error occurred while storing the AI message'));
@@ -372,6 +376,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     res.status(500).json({ error: 'An error occurred while processing the conversation message' });
   }
 });
+
 
 
 
