@@ -12,9 +12,10 @@ import path from 'path';
 import https from 'https';
 import { createClient } from "@deepgram/sdk";
 import { clerkMiddleware, getAuth, requireAuth } from '@clerk/express';
+import adminRouter from './admin.mjs';
+import billingRoutes from './billing.mjs';
 
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-
 
 const convertToWav = (inputFile, outputFile) => {
   return new Promise((resolve, reject) => {
@@ -26,7 +27,7 @@ const convertToWav = (inputFile, outputFile) => {
   });
 };
 
-import adminRouter from './admin.mjs';
+
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.use(clerkMiddleware());
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use('/admin', adminRouter);
+app.use('/api/billing', billingRoutes);
 
 // Initialiser OpenAI avec la clé d'API
 const openai = new OpenAI({
