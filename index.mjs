@@ -53,9 +53,15 @@ const corsOptions = {
 
 app.use(clerkMiddleware());
 app.use(cors(corsOptions));
+
+
+app.use('/api/billing/webhook', express.raw({ type: 'application/json' }));
+// Middleware JSON pour toutes les autres routes
 app.use(express.json());
+
 app.use('/admin', adminRouter);
 app.use('/api/billing', billingRoutes);
+
 
 // Initialiser OpenAI avec la clé d'API
 const openai = new OpenAI({
