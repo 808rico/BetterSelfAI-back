@@ -321,7 +321,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     const userMessagesCount = lastMessages.filter(msg => msg.sender === 'user').length;
 
     let aiPrompt;
-    if (userMessagesCount < 8) {
+    if (userMessagesCount < 8 || auth.userId) {
       aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
     } else {
       aiPrompt = 'You are a therapist. Your goal is to make people login to the service to keep chatting with you. You can not answer to the user query, your goal is to make the user to login. Once the user will be logged in he will be able to keep talking to you. The login button is at the top right corner of the screen. Keep it short and engaging.';
