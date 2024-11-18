@@ -215,7 +215,6 @@ app.post('/api/users/switch-user-hash', requireAuth(), (req, res) => {
 
 // Configuration de multer pour stocker les fichiers temporairement
 const upload = multer({ dest: 'uploads/' });
-//A MODIFIER: il faut prendre en entré que le user_hash puis requeter la bdd pour trouver la conv et les messages
 app.post('/api/conversations/message', upload.single('message'), async (req, res) => {
   const { userHash, modelId, type } = req.body;
 
@@ -299,6 +298,30 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
+
+    // 4. Créer le contexte pour l'IA
+    const getTotalMessageCountQuery = `
+      SELECT count(Distinct(id)) FROM messages
+      WHERE conversation_hash = ? AND sender = 'user'
+    `;
+    let totalMessageCount = await new Promise((resolve, reject) => {
+      db.query(getTotalMessageCountQuery, [conversationHash], (err, results) => {
+        if (err) {
+          console.error('Error fetching last messages:', err);
+          reject(new Error('An error occurred while fetching last messages'));
+        } else {
+          resolve(results);
+        }
+      });
+    });
+    totalMessageCount = totalMessageCount[0]['count(Distinct(id))']
+
+    console.log('Total', totalMessageCount)
+
+
+
+   
+
     // 4. Créer le contexte pour l'IA
     const getLastMessagesQuery = `
       SELECT sender, message FROM messages 
@@ -329,22 +352,33 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     const userMessagesCount = lastMessages.filter(msg => msg.sender === 'user').length;
 
     let aiPrompt;
-    if (userMessagesCount < 8) {
+    if(totalMessageCount > 10){
+      aiReply = 'Please subscribe to keep talking'
+    }
+    else if (userMessagesCount < 8  ||  auth.userId) {
       aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: 'system', content: aiPrompt },
+          { role: 'user', content: conversationContext },
+        ],
+      });
+  
+      aiReply = completion.choices[0].message.content;
     } else {
       aiPrompt = 'You are a therapist. Your goal is to make people login to the service to keep chatting with you. You can not answer to the user query, your goal is to make the user to login. Once the user will be logged in he will be able to keep talking to you. The login button is at the top right corner of the screen. Keep it short and engaging.';
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: 'system', content: aiPrompt },
+          { role: 'user', content: conversationContext },
+        ],
+      });
+  
+      aiReply = completion.choices[0].message.content;
     }
 
-    // Appeler OpenAI API pour obtenir la réponse de l'IA avec le prompt approprié
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: 'system', content: aiPrompt },
-        { role: 'user', content: conversationContext },
-      ],
-    });
-
-    aiReply = completion.choices[0].message.content;
 
 
     // 6. Insérer le message de l'IA avec un timestamp incrémenté de 1 seconde
