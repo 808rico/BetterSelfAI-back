@@ -299,7 +299,28 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     });
 
 
-    // 4. Créer le contexte pour l'IA
+    const getSubscriptionQuery = `
+  SELECT MAX(end_date) AS latest_end_date 
+  FROM subscriptions 
+  WHERE user_hash = ?
+`;
+    //Check si l'utilisateur est abonné
+    const subscriptionStatus = await new Promise((resolve, reject) => {
+      db.query(getSubscriptionQuery, [auth.userId], (err, results) => {
+        if (err) {
+          console.error('Error fetching subscription status:', err);
+          reject(new Error('An error occurred while fetching subscription status'));
+        } else {
+          if (results.length > 0 && results[0].latest_end_date && new Date(results[0].latest_end_date) > new Date()) {
+            resolve(true); // L'utilisateur est abonné
+          } else {
+            resolve(false); // L'utilisateur n'est pas abonné ou l'abonnement est expiré
+          }
+        }
+      });
+    });
+
+    // 4. Compter le nombre de message total
     const getTotalMessageCountQuery = `
       SELECT count(Distinct(id)) FROM messages
       WHERE conversation_hash = ? AND sender = 'user'
@@ -320,7 +341,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 
 
 
-   
+
 
     // 4. Créer le contexte pour l'IA
     const getLastMessagesQuery = `
@@ -352,21 +373,11 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     const userMessagesCount = lastMessages.filter(msg => msg.sender === 'user').length;
 
     let aiPrompt;
-    if(totalMessageCount > 10){
-      aiReply = 'Please subscribe to keep talking'
-    }
-    else if (userMessagesCount < 8  ||  auth.userId) {
-      aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: 'system', content: aiPrompt },
-          { role: 'user', content: conversationContext },
-        ],
-      });
-  
-      aiReply = completion.choices[0].message.content;
-    } else {
+
+
+
+    if (!auth.userId && userMessagesCount >= 8) {
+      // L'utilisateur n'est pas connecté et a atteint la limite de 8 messages
       aiPrompt = 'You are a therapist. Your goal is to make people login to the service to keep chatting with you. You can not answer to the user query, your goal is to make the user to login. Once the user will be logged in he will be able to keep talking to you. The login button is at the top right corner of the screen. Keep it short and engaging.';
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -375,9 +386,25 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
           { role: 'user', content: conversationContext },
         ],
       });
-  
+
+      aiReply = completion.choices[0].message.content;
+    } else if (auth.userId && !subscriptionStatus && totalMessageCount >= 10) {
+      // L'utilisateur est connecté mais non abonné, a atteint la limite de 10 messages
+      aiReply = 'Please subscribe to keep talking';
+    } else {
+      // L'utilisateur est soit connecté et abonné, soit sous la limite des messages
+      aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: 'system', content: aiPrompt },
+          { role: 'user', content: conversationContext },
+        ],
+      });
+
       aiReply = completion.choices[0].message.content;
     }
+
 
 
 
