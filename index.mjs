@@ -12,9 +12,10 @@ import path from 'path';
 import https from 'https';
 import { createClient } from "@deepgram/sdk";
 import { clerkMiddleware, getAuth, requireAuth } from '@clerk/express';
+import adminRouter from './admin.mjs';
+import billingRoutes from './billing.mjs';
 
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-
 
 const convertToWav = (inputFile, outputFile) => {
   return new Promise((resolve, reject) => {
@@ -26,7 +27,7 @@ const convertToWav = (inputFile, outputFile) => {
   });
 };
 
-import adminRouter from './admin.mjs';
+
 
 const app = express();
 
@@ -52,8 +53,15 @@ const corsOptions = {
 
 app.use(clerkMiddleware());
 app.use(cors(corsOptions));
+
+
+app.use('/api/billing/webhook', express.raw({ type: 'application/json' }));
+// Middleware JSON pour toutes les autres routes
 app.use(express.json());
+
 app.use('/admin', adminRouter);
+app.use('/api/billing', billingRoutes);
+
 
 // Initialiser OpenAI avec la clé d'API
 const openai = new OpenAI({
@@ -207,7 +215,6 @@ app.post('/api/users/switch-user-hash', requireAuth(), (req, res) => {
 
 // Configuration de multer pour stocker les fichiers temporairement
 const upload = multer({ dest: 'uploads/' });
-//A MODIFIER: il faut prendre en entré que le user_hash puis requeter la bdd pour trouver la conv et les messages
 app.post('/api/conversations/message', upload.single('message'), async (req, res) => {
   const { userHash, modelId, type } = req.body;
 
@@ -291,6 +298,51 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
     });
 
+
+    const getSubscriptionQuery = `
+  SELECT MAX(end_date) AS latest_end_date 
+  FROM subscriptions 
+  WHERE user_hash = ?
+`;
+    //Check si l'utilisateur est abonné
+    const subscriptionStatus = await new Promise((resolve, reject) => {
+      db.query(getSubscriptionQuery, [auth.userId], (err, results) => {
+        if (err) {
+          console.error('Error fetching subscription status:', err);
+          reject(new Error('An error occurred while fetching subscription status'));
+        } else {
+          if (results.length > 0 && results[0].latest_end_date && new Date(results[0].latest_end_date) > new Date()) {
+            resolve(true); // L'utilisateur est abonné
+          } else {
+            resolve(false); // L'utilisateur n'est pas abonné ou l'abonnement est expiré
+          }
+        }
+      });
+    });
+
+    // 4. Compter le nombre de message total
+    const getTotalMessageCountQuery = `
+      SELECT count(Distinct(id)) FROM messages
+      WHERE conversation_hash = ? AND sender = 'user'
+    `;
+    let totalMessageCount = await new Promise((resolve, reject) => {
+      db.query(getTotalMessageCountQuery, [conversationHash], (err, results) => {
+        if (err) {
+          console.error('Error fetching last messages:', err);
+          reject(new Error('An error occurred while fetching last messages'));
+        } else {
+          resolve(results);
+        }
+      });
+    });
+    totalMessageCount = totalMessageCount[0]['count(Distinct(id))']
+
+    console.log('Total', totalMessageCount)
+
+
+
+
+
     // 4. Créer le contexte pour l'IA
     const getLastMessagesQuery = `
       SELECT sender, message FROM messages 
@@ -321,22 +373,40 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
     const userMessagesCount = lastMessages.filter(msg => msg.sender === 'user').length;
 
     let aiPrompt;
-    if (userMessagesCount < 8 || auth.userId) {
-      aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
-    } else {
+
+
+
+    if (!auth.userId && userMessagesCount >= 8) {
+      // L'utilisateur n'est pas connecté et a atteint la limite de 8 messages
+
       aiPrompt = 'You are a therapist. Your goal is to make people login to the service to keep chatting with you. You can not answer to the user query, your goal is to make the user to login. Once the user will be logged in he will be able to keep talking to you. The login button is at the top right corner of the screen. Keep it short and engaging.';
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: 'system', content: aiPrompt },
+          { role: 'user', content: conversationContext },
+        ],
+      });
+
+      aiReply = completion.choices[0].message.content;
+    } else if (auth.userId && !subscriptionStatus && totalMessageCount >= 15) {
+      // L'utilisateur est connecté mais non abonné, a atteint la limite de 15 messages
+      aiReply = 'You’ve reached your message limit. Please subscribe to continue the conversation and receive the support you deserve.';
+    } else {
+      // L'utilisateur est soit connecté et abonné, soit sous la limite des messages
+      aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: 'system', content: aiPrompt },
+          { role: 'user', content: conversationContext },
+        ],
+      });
+
+      aiReply = completion.choices[0].message.content;
     }
 
-    // Appeler OpenAI API pour obtenir la réponse de l'IA avec le prompt approprié
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: 'system', content: aiPrompt },
-        { role: 'user', content: conversationContext },
-      ],
-    });
 
-    aiReply = completion.choices[0].message.content;
 
 
     // 6. Insérer le message de l'IA avec un timestamp incrémenté de 1 seconde
