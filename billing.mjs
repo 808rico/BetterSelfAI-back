@@ -23,8 +23,8 @@ router.post('/create-checkout-session', async (req, res) => {
 
     try {
         const prices = {
-            monthly: 'price_1QIP8gIOSPC7ROIBtxzHreNO',
-            yearly: 'price_1QIP9nIOSPC7ROIBDrdvyWxw',
+            monthly: process.env.MONTHLY_PLAN_ID,
+            yearly: process.env.YEARLY_PLAN_ID,
         };
 
         if (!prices[plan]) {
