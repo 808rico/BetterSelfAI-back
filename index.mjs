@@ -388,9 +388,9 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       });
 
       aiReply = completion.choices[0].message.content;
-    } else if (auth.userId && !subscriptionStatus && totalMessageCount >= 10) {
-      // L'utilisateur est connecté mais non abonné, a atteint la limite de 10 messages
-      aiReply = 'Please subscribe to keep talking';
+    } else if (auth.userId && !subscriptionStatus && totalMessageCount >= 15) {
+      // L'utilisateur est connecté mais non abonné, a atteint la limite de 15 messages
+      aiReply = 'You’ve reached your message limit. Please subscribe to continue the conversation and receive the support you deserve.';
     } else {
       // L'utilisateur est soit connecté et abonné, soit sous la limite des messages
       aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
