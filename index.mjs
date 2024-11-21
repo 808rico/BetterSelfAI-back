@@ -378,6 +378,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 
     if (!auth.userId && userMessagesCount >= 8) {
       // L'utilisateur n'est pas connecté et a atteint la limite de 8 messages
+
       aiPrompt = 'You are a therapist. Your goal is to make people login to the service to keep chatting with you. You can not answer to the user query, your goal is to make the user to login. Once the user will be logged in he will be able to keep talking to you. The login button is at the top right corner of the screen. Keep it short and engaging.';
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
