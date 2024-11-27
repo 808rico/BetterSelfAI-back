@@ -3,7 +3,10 @@ import Stripe from 'stripe';
 import dotenv from 'dotenv';
 import db from './db.mjs'; // Importez votre module de connexion MySQL
 import { clerkMiddleware, getAuth, requireAuth } from '@clerk/express';
+import mixpanel from 'mixpanel';
 
+// Initialisation de Mixpanel avec votre token
+const mixpanelClient = mixpanel.init(process.env.MIXPANEL_PROJECT_TOKEN);
 dotenv.config();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -20,6 +23,11 @@ dotenv.config();
 router.post('/create-checkout-session', async (req, res) => {
     const { plan, userId } = req.body; // Récupérer le userId du frontend
     console.log(userId)
+
+    mixpanelClient.track('PAYMENT_STARTED', {
+        $user_id: userId,
+        plan
+    });
 
     try {
         const prices = {
@@ -128,7 +136,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         const metadata = invoice.lines.data[0].metadata || {};
         const userId = metadata.userId; // Vérifiez que userId est bien dans les métadonnées
         const stripeCustomerId = invoice.customer; // Le Stripe Customer ID
-        const startDate = new Date(invoice.lines.data[0].period.start * 1000); 
+        const startDate = new Date(invoice.lines.data[0].period.start * 1000);
         const endDate = new Date(invoice.lines.data[0].period.end * 1000);
 
         if (!userId) {
@@ -166,6 +174,10 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                     return res.status(500).json({ error: 'Database error while updating stripe_customer_id' });
                 }
                 console.log(`Stripe customer ID updated for user: ${userId}`);
+            });
+
+            mixpanelClient.track('PAYMENT_COMPLETED', {
+                $user_id: userId
             });
 
         } catch (dbErr) {
