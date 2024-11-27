@@ -14,6 +14,10 @@ import { createClient } from "@deepgram/sdk";
 import { clerkMiddleware, getAuth, requireAuth } from '@clerk/express';
 import adminRouter from './admin.mjs';
 import billingRoutes from './billing.mjs';
+import mixpanel from 'mixpanel';
+
+// Initialisation de Mixpanel avec votre token
+const mixpanelClient = mixpanel.init(process.env.MIXPANEL_PROJECT_TOKEN);
 
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
@@ -183,6 +187,12 @@ app.post('/api/users/switch-user-hash', requireAuth(), (req, res) => {
     if (checkResult.length > 0) {
       return res.status(200).json({ message: 'UserID already present, no update needed' });
     }
+
+
+    mixpanelClient.track('FIRST_SIGNUP', {
+      $device_id: oldUserHash, // Utiliser userHash comme identifiant unique
+      $user_id: userID
+    });
 
     // Mettre à jour le user_hash dans les tables si l'userID n'est pas trouvé
     const updateUserHashQuery = 'UPDATE users SET user_hash = ? WHERE user_hash = ?';
@@ -390,6 +400,11 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
 
       aiReply = completion.choices[0].message.content;
     } else if (auth.userId && !subscriptionStatus && totalMessageCount >= 15) {
+
+      mixpanelClient.track('MESSAGE_LIMIT_REACHED', {
+        $user_id: auth.userId || undefined, // Utiliser auth.userId si connecté
+        $device_id: auth.userId ? undefined : userHash, // Utiliser userHash si non connecté
+      });
       // L'utilisateur est connecté mais non abonné, a atteint la limite de 15 messages
       aiReply = 'You’ve reached your message limit. Please subscribe to continue the conversation and receive the support you deserve.';
     } else {
@@ -441,14 +456,21 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       return res.status(500).json({ error: 'An error occurred while generating the audio with OpenAI' });
     }
 
+    // Tracker l'événement dans Mixpanel
+    const userMessageLength = messageText.length;
+    const aiMessageLength = aiReply.length;
+    mixpanelClient.track('MESSAGE', {
+      $user_id: auth.userId || undefined, // Utiliser auth.userId si connecté
+      $device_id: auth.userId ? undefined : userHash, // Utiliser userHash si non connecté
+      userMessageLength,
+      aiMessageLength,
+    });
+
   } catch (error) {
     console.error('Error processing conversation message:', error);
     res.status(500).json({ error: 'An error occurred while processing the conversation message' });
   }
 });
-
-
-
 
 
 
@@ -537,7 +559,16 @@ app.post('/api/new-user', async (req, res) => {
       });
     });
 
-    // Étape 9 : Retourner le hash de conversation, le message de bienvenue et l'audio
+    // Étape 9 : Suivi de l'événement dans Mixpanel
+    mixpanelClient.track('ONBOARDING_END', {
+      
+      $device_id: userHash, // Utiliser userHash comme deviceId
+      name,
+      voice,
+    });
+    console.log('Mixpanel event tracked: ONBOARDING_END');
+
+    // Étape 10 : Retourner le hash de conversation, le message de bienvenue et l'audio
     res.status(201).json({
       message: 'User and conversation created successfully',
       conversationHash,
