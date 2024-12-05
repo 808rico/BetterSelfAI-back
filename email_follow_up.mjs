@@ -1,0 +1,210 @@
+import 'dotenv/config';
+import db from './db.mjs'; // Votre configuration DB
+import OpenAI from 'openai';
+import fetch from 'node-fetch';
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+(async () => {
+  console.log("Cron job démarré : récupération des utilisateurs et génération d'emails.");
+
+  try {
+    const batchSize = 500; // Taille des batchs
+    let offset = 0;
+    let clerkUsers = [];
+    let batchUsers;
+
+    // Étape 1 : Récupérer tous les utilisateurs de Clerk par batch
+    do {
+      const clerkResponse = await fetch(
+        `https://api.clerk.dev/v1/users?limit=${batchSize}&offset=${offset}`,
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (!clerkResponse.ok) {
+        throw new Error(`Erreur API Clerk : ${await clerkResponse.text()}`);
+      }
+
+      batchUsers = await clerkResponse.json();
+      clerkUsers = [...clerkUsers, ...batchUsers];
+      offset += batchSize;
+    } while (batchUsers.length === batchSize);
+
+    console.log(`Total utilisateurs récupérés de Clerk : ${clerkUsers.length}`);
+
+    // Étape 2 : Récupérer les `conversation_hash` où le dernier message est entre 24 et 48 heures
+    const currentTime = Date.now();
+    const twentyFourHoursAgo = new Date(currentTime - 23 * 60 * 60 * 1000);
+    const fortyEightHoursAgo = new Date(currentTime - 48 * 60 * 60 * 1000);
+
+    const conversationsQuery = `
+      SELECT conversation_hash
+      FROM (
+        SELECT conversation_hash, created_at
+        FROM messages
+        WHERE created_at BETWEEN ? AND ?
+        AND sender = 'user'
+      ) AS subquery
+      GROUP BY conversation_hash
+      ORDER BY MAX(created_at) DESC;
+    `;
+
+    const conversationHashes = await new Promise((resolve, reject) => {
+      db.query(
+        conversationsQuery,
+        [fortyEightHoursAgo, twentyFourHoursAgo],
+        (err, results) => {
+          if (err) {
+            console.error("Erreur lors de la récupération des conversations :", err);
+            reject(err);
+          } else {
+            resolve(results.map((row) => row.conversation_hash));
+          }
+        }
+      );
+    });
+
+    console.log(`Conversations sélectionnées : ${conversationHashes.length}`);
+
+    // Étape 3 : Récupérer les `user_hash` associés à ces conversations
+    let userHashes = [];
+
+    if (conversationHashes.length > 0) {
+      const userHashQuery = `
+        SELECT DISTINCT user_hash
+        FROM conversations
+        WHERE conversation_hash IN (?)
+      `;
+
+      userHashes = await new Promise((resolve, reject) => {
+        db.query(userHashQuery, [conversationHashes], (err, results) => {
+          if (err) {
+            console.error("Erreur lors de la récupération des user_hash :", err);
+            reject(err);
+          } else {
+            resolve(results.map((row) => row.user_hash));
+          }
+        });
+      });
+
+      console.log(`Utilisateurs potentiels à notifier : ${userHashes.length}`);
+    } else {
+      console.log("Aucun conversation_hash trouvé. Aucune action nécessaire.");
+    }
+
+    // Étape 4 : Filtrer les utilisateurs qui existent dans Clerk
+    const usersToNotify = clerkUsers.filter((user) =>
+      userHashes.includes(user.id)
+    );
+
+    console.log(`Utilisateurs avec compte Clerk à notifier : ${usersToNotify.length}`);
+
+    // Étape 5 : Envoyer les e-mails personnalisés aux utilisateurs
+    for (const user of usersToNotify) {
+      const email = user.email_addresses[0].email_address;
+      const userId = user.id;
+
+      console.log(`Préparation de l'email pour ${email}`);
+
+      // Récupérer les messages en utilisant le conversation_hash
+      const messagesQuery = `
+        SELECT sender, message
+        FROM messages
+        WHERE conversation_hash = (
+          SELECT conversation_hash
+          FROM conversations
+          WHERE user_hash = ?
+          ORDER BY created_at DESC LIMIT 1
+        )
+        ORDER BY created_at ASC;
+      `;
+
+      const messages = await new Promise((resolve, reject) => {
+        db.query(messagesQuery, [userId], (err, results) => {
+          if (err) {
+            console.error(`Erreur lors de la récupération des messages pour user_hash=${userId} :`, err);
+            reject(err);
+          } else {
+            resolve(results);
+          }
+        });
+      });
+
+      if (!messages.length) {
+        console.log(`Aucun message trouvé pour l'utilisateur ${userId}`);
+        continue;
+      }
+
+      // Construire le contexte pour OpenAI
+      let conversationContext = `Here is the conversation you had yesterday :\n`;
+      messages.forEach((msg) => {
+        const senderLabel = msg.sender === 'user' ? 'User' : 'Therapist';
+        conversationContext += `${senderLabel} : ${msg.message}\n`;
+      });
+
+      // Générer le contenu de l'email avec OpenAI
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a therapist who provides helpful answers to a patient. \n \n You had the following conversation with one of your patient yesterday. Write a friendly, very short and engaging email to follow up with him. Don't ask more than one question. Only answer the email content (not the subject). Don't add any variable like [Your Name].",
+          },
+          { role: "user", content: conversationContext },
+        ],
+      });
+
+      const emailContent = completion.choices[0].message.content;
+
+      // Ajouter un bouton et un lien cliquable au contenu HTML
+      const emailHtmlContent = `
+        <p>${emailContent.replace(/\n/g, '<br>')}</p>
+        <div style="text-align: center; margin: 20px 0;">
+          <a href="https://betterselfai.com/talk" 
+             style="display: inline-block; padding: 10px 20px; background-color: #007BFF; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
+             Reply
+          </a>
+        </div>
+        <p style="text-align: center; margin-top: 20px;">
+          <a href="https://betterselfai.com/opt-out?userId=${userId}" style="color: #007BFF; text-decoration: none;">
+            Unsuscribe from emails
+          </a>
+        </p>
+      `;
+
+      // Envoyer l'email avec Brevo
+      const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+        },
+        body: JSON.stringify({
+          sender: { name: "Better Self AI", email: "hello@betterselfai.com" },
+          to: [{ email }],
+          subject: "Just checking in with you",
+          htmlContent: emailHtmlContent,
+        }),
+      });
+
+      if (!brevoResponse.ok) {
+        console.error(`Erreur lors de l'envoi de l'email à ${email} :`, await brevoResponse.text());
+      } else {
+        console.log(`Email envoyé avec succès à ${email}`);
+      }
+    }
+  } catch (error) {
+    console.error("Erreur dans le cron job :", error);
+  }
+
+  console.log("Cron job terminé.");
+})();
