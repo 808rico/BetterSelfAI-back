@@ -2,6 +2,10 @@ import 'dotenv/config';
 import db from './db.mjs'; // Votre configuration DB
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
+import mixpanel from 'mixpanel';
+
+
+const mixpanelClient = mixpanel.init(process.env.MIXPANEL_PROJECT_TOKEN);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -200,6 +204,9 @@ const openai = new OpenAI({
         console.error(`Erreur lors de l'envoi de l'email à ${email} :`, await brevoResponse.text());
       } else {
         console.log(`Email envoyé avec succès à ${email}`);
+        mixpanelClient.track('FOLLOW_UP_EMAIL_SENT', {
+          $user_id: userId
+        });
       }
     }
   } catch (error) {
