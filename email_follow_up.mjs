@@ -156,38 +156,57 @@ const openai = new OpenAI({
         conversationContext += `${senderLabel} : ${msg.message}\n`;
       });
 
-      // Générer le contenu de l'email avec OpenAI
+      // Generate the email subject and content with OpenAI
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
+        response_format: { "type": "json_object" },
         messages: [
           {
             role: "system",
-            content:
-              "You are a therapist who provides helpful answers to a patient. \n \n You had the following conversation with one of your patient yesterday. Write a friendly, very short and engaging email to follow up with him. Don't ask more than one question. Only answer the email content (not the subject). Don't add any variable like [Your Name].",
+            content: `
+        You are a helpful assistant acting as a therapist's assistant. Your task is to draft a follow-up email after a conversation between the therapist and the patient.
+
+        Respond strictly in the following JSON format:
+
+        {
+          "subject": "A short subject line (max 8 words)",
+          "content": "A short and friendly email body personalized to the conversation context, engaging, and ending with no more than one question."
+        }
+
+        The subject should be concise and directly related to the context of the conversation.
+
+        The content should be a friendly, short, and engaging email body that feels personalized based on the context of the conversation.
+
+        Respond ONLY in JSON format. Do not include any additional text.
+      `,
           },
           { role: "user", content: conversationContext },
         ],
       });
 
-      const emailContent = completion.choices[0].message.content;
+      const responseJson = JSON.parse(completion.choices[0].message.content);
 
-      // Ajouter un bouton et un lien cliquable au contenu HTML
+      // Extract the subject and content from the JSON response
+      const emailSubject = responseJson.subject;
+      const emailContent = responseJson.content;
+
+      // Add a button and an unsubscribe link to the email content
       const emailHtmlContent = `
         <p>${emailContent.replace(/\n/g, '<br>')}</p>
         <div style="text-align: center; margin: 20px 0;">
-          <a href="https://betterselfai.com/talk" 
-             style="display: inline-block; padding: 10px 20px; background-color: #007BFF; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
-             Reply
+          <a href="${process.env.URL}/talk" 
+            style="display: inline-block; padding: 10px 20px; background-color: #007BFF; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
+            Reply
           </a>
         </div>
         <p style="text-align: center; margin-top: 20px;">
-          <a href="https://betterselfai.com/opt-out?userId=${userId}" style="color: #007BFF; text-decoration: none;">
-            Unsuscribe from emails
+          <a href="${process.env.URL}/opt-out?userId=${userId}" style="color: #007BFF; text-decoration: none;">
+            Unsubscribe from emails
           </a>
         </p>
       `;
 
-      // Envoyer l'email avec Brevo
+      // Send the email using Brevo
       const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: {
@@ -197,7 +216,7 @@ const openai = new OpenAI({
         body: JSON.stringify({
           sender: { name: "Better Self AI", email: "hello@betterselfai.com" },
           to: [{ email }],
-          subject: "Just checking in with you",
+          subject: emailSubject,
           htmlContent: emailHtmlContent,
         }),
       });
@@ -210,7 +229,7 @@ const openai = new OpenAI({
           $user_id: userId,
         });
 
-        // Ajouter le message généré à la table `messages`
+        // Insert the generated email content into the database
         const insertMessageQuery = `
       INSERT INTO messages (conversation_hash, sender, message, message_type)
       VALUES (?, 'AI', ?, 'text')
@@ -229,6 +248,7 @@ const openai = new OpenAI({
 
         console.log(`Message ajouté à la base de données pour conversation_hash=${conversationHash}`);
       }
+
     }
 
   } catch (error) {
