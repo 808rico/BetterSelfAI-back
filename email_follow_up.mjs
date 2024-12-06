@@ -4,7 +4,6 @@ import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import mixpanel from 'mixpanel';
 
-
 const mixpanelClient = mixpanel.init(process.env.MIXPANEL_PROJECT_TOKEN);
 
 const openai = new OpenAI({
@@ -118,21 +117,21 @@ const openai = new OpenAI({
 
       console.log(`Préparation de l'email pour ${email}`);
 
-      // Récupérer les messages en utilisant le conversation_hash
-      const messagesQuery = `
-        SELECT sender, message
-        FROM messages
-        WHERE conversation_hash = (
-          SELECT conversation_hash
-          FROM conversations
-          WHERE user_hash = ?
-          ORDER BY created_at DESC LIMIT 1
-        )
-        ORDER BY created_at ASC;
-      `;
+      // Récupérer le conversation_hash et les messages associés
+      const conversationQuery = `
+          SELECT conversation_hash, sender, message
+          FROM messages
+          WHERE conversation_hash = (
+            SELECT conversation_hash
+            FROM conversations
+            WHERE user_hash = ?
+            ORDER BY created_at DESC LIMIT 1
+          )
+          ORDER BY created_at ASC;
+        `;
 
-      const messages = await new Promise((resolve, reject) => {
-        db.query(messagesQuery, [userId], (err, results) => {
+      const conversationData = await new Promise((resolve, reject) => {
+        db.query(conversationQuery, [userId], (err, results) => {
           if (err) {
             console.error(`Erreur lors de la récupération des messages pour user_hash=${userId} :`, err);
             reject(err);
@@ -142,14 +141,17 @@ const openai = new OpenAI({
         });
       });
 
-      if (!messages.length) {
+      if (!conversationData.length) {
         console.log(`Aucun message trouvé pour l'utilisateur ${userId}`);
         continue;
       }
 
+      // Récupérer le conversation_hash pour cet utilisateur
+      const conversationHash = conversationData[0].conversation_hash;
+
       // Construire le contexte pour OpenAI
       let conversationContext = `Here is the conversation you had yesterday :\n`;
-      messages.forEach((msg) => {
+      conversationData.forEach((msg) => {
         const senderLabel = msg.sender === 'user' ? 'User' : 'Therapist';
         conversationContext += `${senderLabel} : ${msg.message}\n`;
       });
@@ -205,10 +207,30 @@ const openai = new OpenAI({
       } else {
         console.log(`Email envoyé avec succès à ${email}`);
         mixpanelClient.track('FOLLOW_UP_EMAIL_SENT', {
-          $user_id: userId
+          $user_id: userId,
         });
+
+        // Ajouter le message généré à la table `messages`
+        const insertMessageQuery = `
+      INSERT INTO messages (conversation_hash, sender, message, message_type)
+      VALUES (?, 'AI', ?, 'text')
+    `;
+
+        await new Promise((resolve, reject) => {
+          db.query(insertMessageQuery, [conversationHash, emailContent], (err, results) => {
+            if (err) {
+              console.error(`Erreur lors de l'insertion du message pour user_hash=${userId} :`, err);
+              reject(err);
+            } else {
+              resolve(results);
+            }
+          });
+        });
+
+        console.log(`Message ajouté à la base de données pour conversation_hash=${conversationHash}`);
       }
     }
+
   } catch (error) {
     console.error("Erreur dans le cron job :", error);
   }
