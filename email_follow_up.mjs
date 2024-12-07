@@ -45,7 +45,7 @@ const openai = new OpenAI({
 
     // Étape 2 : Récupérer les `conversation_hash` où le dernier message est entre 24 et 48 heures
     const currentTime = Date.now();
-    const twentyFourHoursAgo = new Date(currentTime - 23 * 60 * 60 * 1000);
+    const twentyFourHoursAgo = new Date(currentTime - 24 * 60 * 60 * 1000);
     const fortyEightHoursAgo = new Date(currentTime - 48 * 60 * 60 * 1000);
 
     const conversationsQuery = `
@@ -173,9 +173,9 @@ const openai = new OpenAI({
           "content": "A short and friendly email body personalized to the conversation context, engaging, and ending with no more than one question."
         }
 
-        The subject should be concise and directly related to the context of the conversation.
+        The subject should be concise and can be related to the context of the conversation. (ex: Just checking in with you...)
 
-        The content should be a friendly, short, and engaging email body that feels personalized based on the context of the conversation.
+        The content should be a friendly, short, and engaging email body that feels personalized based on the context of the conversation. You can add some line break if needed.
 
         Respond ONLY in JSON format. Do not include any additional text.
       `,
@@ -194,7 +194,7 @@ const openai = new OpenAI({
       const emailHtmlContent = `
         <p>${emailContent.replace(/\n/g, '<br>')}</p>
         <div style="text-align: center; margin: 20px 0;">
-          <a href="${process.env.URL}/talk" 
+         <a href="${process.env.URL}/talk?from_follow_up_email=true&user_id=${userId}" 
             style="display: inline-block; padding: 10px 20px; background-color: #007BFF; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
             Reply
           </a>
@@ -232,7 +232,7 @@ const openai = new OpenAI({
         // Insert the generated email content into the database
         const insertMessageQuery = `
       INSERT INTO messages (conversation_hash, sender, message, message_type)
-      VALUES (?, 'AI', ?, 'text')
+      VALUES (?, 'AI', ?, 'text_follow_up')
     `;
 
         await new Promise((resolve, reject) => {
