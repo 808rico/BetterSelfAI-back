@@ -175,7 +175,7 @@ const openai = new OpenAI({
 
         The subject should be concise and can be related to the context of the conversation. (ex: Just checking in with you...)
 
-        The content should be a friendly, short, and engaging email body that feels personalized based on the context of the conversation. You can add some line break if needed.
+        The content should be a friendly, short, and engaging email body that feels personalized based on the context of the conversation. You can add some line break if needed. Sign the email by writting 'Your Therapist'.
 
         Respond ONLY in JSON format. Do not include any additional text.
       `,
