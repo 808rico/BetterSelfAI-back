@@ -409,7 +409,7 @@ app.post('/api/conversations/message', upload.single('message'), async (req, res
       aiReply = 'You’ve reached your message limit. Please subscribe to continue the conversation and receive the support you deserve.';
     } else {
       // L'utilisateur est soit connecté et abonné, soit sous la limite des messages
-      aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it short and engaging.';
+      aiPrompt = 'You are a therapist who provides helpful answers to a patient. Depending on the circumstances, you can ask open-ended questions, encourage, reframe the thought, provide empathetic/validation answers, or suggest solutions. Keep it very short and engaging. Do not ask more than one question at a time.';
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
